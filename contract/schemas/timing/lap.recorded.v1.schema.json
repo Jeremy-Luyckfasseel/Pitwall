@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/timing/lap.recorded.v1.schema.json",
+  "title": "timing / lap.recorded (v1) data payload",
+  "description": "A valid crossing of the start-finish line. Published to the 'timing.events' exchange with routing key 'lap.recorded'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["userId", "sessionId", "lapNumber", "lapTimeMs", "at"],
+  "properties": {
+    "userId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Canonical userId issued by Identity."
+    },
+    "sessionId": {
+      "type": "string",
+      "description": "Session the lap belongs to."
+    },
+    "lapNumber": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1-based; the out-lap (first crossing) is not counted."
+    },
+    "lapTimeMs": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Milliseconds since the previous valid crossing."
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the crossing happened (RFC3339 UTC)."
+    },
+    "transponderId": {
+      "type": ["string", "null"],
+      "description": "Hardware id if detected via transponder rather than QR. Optional."
+    }
+  }
+}

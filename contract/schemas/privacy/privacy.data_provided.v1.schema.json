@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/privacy/privacy.data_provided.v1.schema.json",
+  "title": "privacy.data_provided (v1) data payload",
+  "description": "A per-service slice of a data-export bundle. Published by each owning service to its OWN '<service>.events' exchange with routing key 'privacy.data_provided'; consumed by the Control Room which assembles the full export. (ADR-0009.)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["requestId", "userId", "service", "payload", "at"],
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The originating privacy.export_requested id."
+    },
+    "userId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The data subject."
+    },
+    "service": {
+      "type": "string",
+      "description": "The emitting service name (matches the envelope 'source')."
+    },
+    "payload": {
+      "type": "object",
+      "description": "This service's portion of the subject's personal data. Service-specific; consumers (Control Room) treat it as opaque content.",
+      "additionalProperties": true
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the slice was produced (RFC3339 UTC)."
+    }
+  }
+}

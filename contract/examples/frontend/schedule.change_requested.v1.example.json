@@ -1,0 +1,19 @@
+{
+  "id": "b6e1c0a2-9d3f-4e57-8c10-2a4b6d8e0f12",
+  "type": "schedule.change_requested",
+  "source": "frontend",
+  "schemaVersion": 1,
+  "occurredAt": "2026-06-01T09:15:00.000Z",
+  "correlationId": "b6e1c0a2-9d3f-4e57-8c10-2a4b6d8e0f12",
+  "causationId": null,
+  "data": {
+    "requestId": "b6e1c0a2-9d3f-4e57-8c10-2a4b6d8e0f12",
+    "action": "reschedule",
+    "sessionId": "session-2026-06-01-evening-heat-5",
+    "plannedStart": "2026-06-01T20:30:00.000Z",
+    "plannedEnd": "2026-06-01T20:50:00.000Z",
+    "capacity": null,
+    "adminActor": "admin:tom",
+    "at": "2026-06-01T09:15:00.000Z"
+  }
+}

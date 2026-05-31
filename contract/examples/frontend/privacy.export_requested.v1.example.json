@@ -1,0 +1,16 @@
+{
+  "id": "f0c5a4e6-3b7d-4c9b-9a54-6e8f0b2c4d56",
+  "type": "privacy.export_requested",
+  "source": "frontend",
+  "schemaVersion": 1,
+  "occurredAt": "2026-06-01T11:45:00.000Z",
+  "correlationId": "f0c5a4e6-3b7d-4c9b-9a54-6e8f0b2c4d56",
+  "causationId": null,
+  "data": {
+    "requestId": "f0c5a4e6-3b7d-4c9b-9a54-6e8f0b2c4d56",
+    "userId": "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21",
+    "requestedBy": "self",
+    "adminActor": null,
+    "at": "2026-06-01T11:45:00.000Z"
+  }
+}

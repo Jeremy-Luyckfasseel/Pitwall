@@ -1,0 +1,16 @@
+{
+  "id": "c7f2d1b3-0e4a-4f68-9d21-3b5c7e9f1a23",
+  "type": "session.control_requested",
+  "source": "frontend",
+  "schemaVersion": 1,
+  "occurredAt": "2026-06-01T19:00:00.000Z",
+  "correlationId": "c7f2d1b3-0e4a-4f68-9d21-3b5c7e9f1a23",
+  "causationId": null,
+  "data": {
+    "requestId": "c7f2d1b3-0e4a-4f68-9d21-3b5c7e9f1a23",
+    "sessionId": "session-2026-06-01-evening-heat-3",
+    "action": "start",
+    "adminActor": "admin:tom",
+    "at": "2026-06-01T19:00:00.000Z"
+  }
+}

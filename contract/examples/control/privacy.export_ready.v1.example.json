@@ -1,0 +1,15 @@
+{
+  "id": "c3f8d7b9-6e0a-4f2e-8d87-9b1c3e5f7a89",
+  "type": "privacy.export_ready",
+  "source": "control",
+  "schemaVersion": 1,
+  "occurredAt": "2026-06-01T11:45:06.500Z",
+  "correlationId": "f0c5a4e6-3b7d-4c9b-9a54-6e8f0b2c4d56",
+  "causationId": "f0c5a4e6-3b7d-4c9b-9a54-6e8f0b2c4d56",
+  "data": {
+    "requestId": "f0c5a4e6-3b7d-4c9b-9a54-6e8f0b2c4d56",
+    "userId": "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21",
+    "documentRef": "export/1a9f7c20-2026-06-01.zip",
+    "at": "2026-06-01T11:45:06.500Z"
+  }
+}

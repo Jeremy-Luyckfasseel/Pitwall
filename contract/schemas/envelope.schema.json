@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/envelope.schema.json",
+  "title": "Pitwall message envelope",
+  "description": "Every message on the bus uses this envelope. The event-specific payload lives under `data` and is validated against its own schema based on `type` + `schemaVersion`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "type", "source", "schemaVersion", "occurredAt", "correlationId", "data"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique per message. Used by the idempotent inbox to dedupe."
+    },
+    "type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+      "description": "<entity>.<action>, matches the routing key, e.g. 'lap.recorded'."
+    },
+    "source": {
+      "type": "string",
+      "description": "Owning service name, e.g. 'timing'."
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Bumped only on a breaking change to the data payload."
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC time the fact happened."
+    },
+    "correlationId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Created once at the start of a flow and copied onto every downstream event."
+    },
+    "causationId": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Id of the message that directly caused this one. Null for flow-originating events."
+    },
+    "data": {
+      "type": "object",
+      "description": "Event-specific payload; validated against the schema for `type` + `schemaVersion`."
+    }
+  }
+}

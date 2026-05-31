@@ -1,0 +1,19 @@
+{
+  "id": "d4a9e8c0-7f1b-4a3f-9e98-0c2d4f6a8b90",
+  "type": "bar.order_placed",
+  "source": "bar",
+  "schemaVersion": 1,
+  "occurredAt": "2026-06-01T19:40:12.000Z",
+  "correlationId": "d4a9e8c0-7f1b-4a3f-9e98-0c2d4f6a8b90",
+  "causationId": null,
+  "data": {
+    "orderId": "pos-terminal-1-000874",
+    "userId": null,
+    "items": [
+      { "name": "Cola 33cl", "quantity": 2, "unitPrice": 2.5 },
+      { "name": "Fries", "quantity": 1, "unitPrice": 3.5 }
+    ],
+    "total": 8.5,
+    "at": "2026-06-01T19:40:12.000Z"
+  }
+}

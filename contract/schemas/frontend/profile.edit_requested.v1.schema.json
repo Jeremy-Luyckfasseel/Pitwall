@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/frontend/profile.edit_requested.v1.schema.json",
+  "title": "frontend / profile.edit_requested (v1) data payload",
+  "description": "A driver editing their own profile. Published to the 'frontend.events' exchange with routing key 'profile.edit_requested'; Driver applies racing fields, CRM applies contact + consent. Each consumer updates only the fields it owns. (Q1.5 / Q8.3.)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["requestId", "userId", "at"],
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Correlates the edit intent with the resulting driver/crm events."
+    },
+    "userId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Canonical userId of the driver editing their profile."
+    },
+    "racing": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "description": "Driver-owned racing fields (applied by Driver).",
+      "properties": {
+        "nickname": { "type": "string", "description": "Leaderboard nickname." },
+        "racingNumber": { "type": "string", "description": "Preferred racing number." },
+        "kartClass": { "type": "string", "description": "Preferred kart class." }
+      }
+    },
+    "contact": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "description": "CRM-owned contact fields (applied by CRM).",
+      "properties": {
+        "legalName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" }
+      }
+    },
+    "consent": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "description": "CRM-owned consent flags (applied by CRM).",
+      "properties": {
+        "marketingConsent": { "type": "boolean" }
+      }
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the edit was submitted (RFC3339 UTC)."
+    }
+  }
+}

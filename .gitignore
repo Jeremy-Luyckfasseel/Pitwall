@@ -1,0 +1,28 @@
+# Secrets / local config — never commit real values (see .env.example)
+.env
+.env.*
+!.env.example
+
+# Dependencies / build output (per-service, polyglot — extend as services are added)
+node_modules/
+dist/
+build/
+__pycache__/
+*.pyc
+bin/
+obj/
+
+# Logs & local data
+*.log
+data/
+
+# BMAD
+_bmad/
+_bmad-output/
+
+# IDEs & OS files
+.vscode/
+.idea/
+.claude
+*.stackdump
+

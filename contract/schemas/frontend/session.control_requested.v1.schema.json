@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/frontend/session.control_requested.v1.schema.json",
+  "title": "frontend / session.control_requested (v1) data payload",
+  "description": "An operator race-control action to start or end a session. Published to the 'frontend.events' exchange with routing key 'session.control_requested'; consumed by Timing, which turns it into the ACTUAL session.started / session.ended. (ADR-0010.)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["requestId", "sessionId", "action", "adminActor", "at"],
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Correlates the control action with Timing's resulting event."
+    },
+    "sessionId": {
+      "type": "string",
+      "description": "The session to start or end."
+    },
+    "action": {
+      "type": "string",
+      "enum": ["start", "end"],
+      "description": "Race-control action. Starting an already-started or ending a never-started session is handled gracefully (Round 14)."
+    },
+    "adminActor": {
+      "type": "string",
+      "description": "The operator/admin account that issued the action (for audit attribution)."
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the operator issued the action (RFC3339 UTC)."
+    }
+  }
+}

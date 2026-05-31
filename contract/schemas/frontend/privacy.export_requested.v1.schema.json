@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/frontend/privacy.export_requested.v1.schema.json",
+  "title": "frontend / privacy.export_requested (v1) data payload",
+  "description": "A data-portability request. Published to the 'frontend.events' exchange with routing key 'privacy.export_requested'; each owning service replies with privacy.data_provided, the Control Room assembles the bundle, Mailing delivers it. (ADR-0009.)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["requestId", "userId", "requestedBy", "at"],
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Correlates the export across services and the assembled bundle."
+    },
+    "userId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Canonical userId whose data is exported."
+    },
+    "requestedBy": {
+      "type": "string",
+      "enum": ["self", "admin"],
+      "description": "Whether the data subject or an admin initiated the export."
+    },
+    "adminActor": {
+      "type": ["string", "null"],
+      "description": "The admin account when requestedBy = admin; null when self-initiated."
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the export was requested (RFC3339 UTC)."
+    }
+  }
+}

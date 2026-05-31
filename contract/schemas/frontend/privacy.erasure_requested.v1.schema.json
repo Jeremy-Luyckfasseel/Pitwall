@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/frontend/privacy.erasure_requested.v1.schema.json",
+  "title": "frontend / privacy.erasure_requested (v1) data payload",
+  "description": "A right-to-be-forgotten request. Published to the 'frontend.events' exchange with routing key 'privacy.erasure_requested'; EVERY service consumes it, deletes or anonymizes its local slice for the userId, and emits privacy.erased. (ADR-0009.)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["requestId", "userId", "requestedBy", "at"],
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Correlates the erasure across all services and their privacy.erased acks."
+    },
+    "userId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Canonical userId to erase."
+    },
+    "requestedBy": {
+      "type": "string",
+      "enum": ["self", "admin"],
+      "description": "Whether the data subject or an admin initiated the erasure."
+    },
+    "adminActor": {
+      "type": ["string", "null"],
+      "description": "The admin account when requestedBy = admin; null when self-initiated (audit attribution)."
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When erasure was requested (RFC3339 UTC)."
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "a1d6b5f7-4c8e-4d0c-8b65-7f9a1c3d5e67",
+  "type": "privacy.erased",
+  "source": "driver",
+  "schemaVersion": 1,
+  "occurredAt": "2026-06-01T11:30:02.140Z",
+  "correlationId": "e9b4f3d5-2a6c-4b8a-bf43-5d7e9a1b3c45",
+  "causationId": "e9b4f3d5-2a6c-4b8a-bf43-5d7e9a1b3c45",
+  "data": {
+    "requestId": "e9b4f3d5-2a6c-4b8a-bf43-5d7e9a1b3c45",
+    "userId": "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21",
+    "service": "driver",
+    "mode": "deleted",
+    "at": "2026-06-01T11:30:02.140Z"
+  }
+}
