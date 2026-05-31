@@ -49,11 +49,20 @@ Full picture: [`docs/analysis/01-architecture-overview.md`](docs/analysis/01-arc
 6. **No "computer says no".** Every failure path has a defined graceful outcome — see
    each service's sad-path table.
 7. **Every service conforms to the [service blueprint](docs/analysis/04-service-blueprint.md).**
+8. **Data governance is first-class.** Every service consumes `privacy.erasure_requested`
+   and **deletes/anonymizes** its slice (a tombstone blocks resurrection), honors retention
+   (7 y financial · 2 y operational · 90 d raw logs), and minimizes PII
+   ([ADR-0009](docs/adr/0009-data-governance.md)).
 
 ## 3. The system (10 services + Control Room)
 
 `Timing` · `Identity` · `Driver` · `CRM` · `Booking` · `Frontend` · `Billing` ·
 `Mailing` · `Leaderboard` · `Bar/POS` · + `Control Room`.
+
+The **operator/admin** acts through a Frontend admin UI (separate, config-seeded login) —
+schedule management and **operator-started sessions** — plus the Control Room dashboard
+([ADR-0010](docs/adr/0010-admin-operator-control-plane.md)). The Control Room also
+coordinates the privacy saga (erasure tracking + export assembly). No 11th service.
 
 Per-service designs: [`docs/analysis/services/`](docs/analysis/services/).
 Event catalog & envelope: [`docs/analysis/02-message-bus-and-contracts.md`](docs/analysis/02-message-bus-and-contracts.md).
@@ -102,3 +111,7 @@ adds an ADR.
 > instead of HTTP `/health`; the Control Room sits on the bus). Both are recorded and
 > justified — see [ADR-0004](docs/adr/0004-bus-only-health-and-self-ping.md). The brief
 > is historical context; `docs/analysis/` is the source of truth.
+>
+> PRD-phase decisions (admin/operator control plane, data governance & privacy,
+> anonymous POS sales + VIES invoicing, operator-started sessions) are recorded in Q&A
+> **Rounds 13–16** and [ADR-0009](docs/adr/0009-data-governance.md)/[ADR-0010](docs/adr/0010-admin-operator-control-plane.md).
