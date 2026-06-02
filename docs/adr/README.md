@@ -18,3 +18,4 @@ Format: Context → Decision → Consequences. Status is `Accepted` unless noted
 | [0008](./0008-single-bus-down-api-exception.md) | The single sanctioned bus-down API exception |
 | [0009](./0009-data-governance.md) | Data governance & privacy as a first-class concern |
 | [0010](./0010-admin-operator-control-plane.md) | Admin surface & operator control plane |
+| [0011](./0011-external-payments-edge.md) | The external payments edge (online stored value) |

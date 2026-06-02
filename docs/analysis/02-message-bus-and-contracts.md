@@ -129,6 +129,14 @@ Schemas in `/contract/schemas`. `→` lists primary consumers.
 | `session.control_requested` | **Operator** start/end a session (ADR-0010) | `sessionId`, `action: start\|end`, `adminActor` | Timing |
 | `privacy.erasure_requested` | Right-to-be-forgotten (ADR-0009) | `userId`, `requestedBy` | **all services** |
 | `privacy.export_requested` | Data-portability request (ADR-0009) | `userId`, `requestedBy` | all owning services |
+| `payment.captured` | **Payments edge** confirmed a PSP capture to **load stored value** (ADR-0011) | `paymentId`, `provider`, `purpose`, `userId?`, `amount`, `currency` | Billing |
+
+> The `payment.captured` event is emitted by the **payments edge inside Frontend** — the sole
+> speaker of the PSP's (Mollie) synchronous HTTPS. The PSP **webhook is external inbound**
+> (like a browser request or a VIES reply), **not** inter-service RPC, so the bus-only rule is
+> **preserved, not excepted** (≠ the [ADR-0008](../adr/0008-single-bus-down-api-exception.md)
+> carve-out). Emitted from the edge's **outbox** so a confirmed payment survives a bus outage.
+> See [ADR-0011](../adr/0011-external-payments-edge.md).
 
 > Note: `*.requested` **intents** are published to the originating service's own
 > exchange (Frontend owns `frontend.events`); the handling service binds to them. This
@@ -140,6 +148,16 @@ Schemas in `/contract/schemas`. `→` lists primary consumers.
 | `tab.opened` | Tab opened on check-in | `tabId`, `userId`, `sessionId` | Control Room |
 | `tab.item_added` | Charge added (session/bar) | `tabId`, item, amount | — |
 | `invoice.issued` | Receipt/invoice produced | `invoiceId`, `number`, `userId`/`companyId`, `documentRef`, `total` | Mailing |
+| `wallet.topped_up` | Wallet credited after a load (ADR-0011) | `userId`, `amount`, `balanceAfter`, `sourcePaymentId` | Frontend, Bar/POS, Control Room |
+| `wallet.debited` | Wallet debited for a spend — a **balance debit**, never a card charge | `userId`, `amount`, `balanceAfter`, `reason`, `ref?` | Frontend, Bar/POS, Control Room |
+| `giftcard.issued` | Bearer gift card issued (**no PII**) | `giftCardId`, `code`, `amount`, `expiresAt?` | Bar/POS, Frontend, Mailing |
+| `giftcard.redeemed` | Gift card loaded-to-wallet or spent (idempotent, no double-spend) | `giftCardId`, `mode`, `amount`, `balanceAfter`, `userId?` | Frontend, Bar/POS, Control Room |
+
+> Billing is the **stored-value ledger system-of-record** (Round 17, ADR-0011): it owns the
+> balance facts (`wallet.*`, `giftcard.*`); the Frontend edge owns only the `payment.captured`
+> money-in fact. Online card payment is confined to **loading value** — all *spending* is one
+> of these balance-debit events, never a fresh online charge. VAT is **multi-purpose voucher**:
+> non-taxable at load, accounted at spend via Billing's existing document logic.
 
 ### `mailing.events`
 | Routing key | Meaning | Key payload | → Consumers |

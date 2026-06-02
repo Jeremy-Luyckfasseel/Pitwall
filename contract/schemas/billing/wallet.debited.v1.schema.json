@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/billing/wallet.debited.v1.schema.json",
+  "title": "billing / wallet.debited (v1) data payload",
+  "description": "Billing (stored-value ledger SoT) DEBITED a wallet for a spend — a balance debit modelled on the bus, NEVER a fresh online card charge (Round 17, ADR-0011). Published to 'billing.events' with routing key 'wallet.debited'. Consumed by Frontend (balance read-model), Bar/POS (local balance copy), Control Room. Partial spend supported; insufficient balance is not represented here (the remainder falls back to normal POS payment). VAT is accounted at this spend via Billing's existing document logic (MPV).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["userId", "amount", "currency", "balanceAfter", "reason", "at"],
+  "properties": {
+    "userId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Wallet owner (canonical userId)."
+    },
+    "amount": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Amount debited, currency major units."
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$",
+      "description": "ISO 4217 code, e.g. 'EUR'."
+    },
+    "balanceAfter": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Authoritative wallet balance after this debit (ECST)."
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["pos_sale", "session", "booking", "bar"],
+      "description": "What the balance paid for."
+    },
+    "ref": {
+      "type": ["string", "null"],
+      "description": "Reference to the charge it settled (e.g. orderId, tabId, bookingId), when applicable."
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the ledger applied the debit (RFC3339 UTC)."
+    }
+  }
+}

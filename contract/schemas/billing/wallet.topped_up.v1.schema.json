@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/billing/wallet.topped_up.v1.schema.json",
+  "title": "billing / wallet.topped_up (v1) data payload",
+  "description": "Billing (the stored-value ledger system-of-record) CREDITED a wallet after a confirmed load (Round 17, ADR-0011). Published to 'billing.events' with routing key 'wallet.topped_up'; caused by a 'payment.captured'. Consumed by Frontend (account balance read-model), Bar/POS (local balance copy for spend), Control Room. 'balanceAfter' carries the authoritative balance (ECST). Non-taxable load (MPV).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["userId", "amount", "currency", "balanceAfter", "sourcePaymentId", "at"],
+  "properties": {
+    "userId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Wallet owner (canonical userId)."
+    },
+    "amount": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Amount credited, currency major units."
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$",
+      "description": "ISO 4217 code, e.g. 'EUR'."
+    },
+    "balanceAfter": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Authoritative wallet balance after this credit (ECST: consumers replace, not accumulate)."
+    },
+    "sourcePaymentId": {
+      "type": "string",
+      "description": "The payment.captured paymentId that funded this top-up (trace + idempotency)."
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the ledger applied the credit (RFC3339 UTC)."
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "d4e5f6a7-4444-4a3f-9e98-0c2d4f6a8b04",
+  "type": "giftcard.issued",
+  "source": "billing",
+  "schemaVersion": 1,
+  "occurredAt": "2026-06-02T18:13:10.000Z",
+  "correlationId": "e5f6a7b8-5555-4a3f-9e98-0c2d4f6a8b05",
+  "causationId": "e5f6a7b8-5555-4a3f-9e98-0c2d4f6a8b05",
+  "data": {
+    "giftCardId": "7a1c9e44-2b8d-4f6a-9c33-5e0d1a2b3c44",
+    "code": "PIT-WALL-7QK3-9ZX2",
+    "amount": 20.0,
+    "currency": "EUR",
+    "expiresAt": "2028-06-02T00:00:00.000Z",
+    "sourcePaymentId": "tr_mollie_2Bx8m1Lp",
+    "at": "2026-06-02T18:13:10.000Z"
+  }
+}
