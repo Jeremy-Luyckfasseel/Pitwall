@@ -638,3 +638,67 @@ in an **append-only audit trail** carrying the `correlationId` **and the acting 
 (driver or admin actor). Marketing consent defaults to **no**; transactional mail always
 sends (consistent with Q7.4/Q9.4). **Data minimization** (each service stores only the slice
 it needs — already ECST) is now an explicit governance requirement.
+
+## Round 17 — Online stored value: wallets, gift cards & the payments edge (PRD phase, 2026-06-02)
+
+> **Amends [Q15/§8 OQ-4](#round-15--pos-invoicing-anonymous-sales--vat-prd-phase):** online
+> payment was a non-goal; it is now reopened in a **single, narrow funnel**. Originated from
+> the UX run (gift cards/vouchers added to the site IA, flagged as a scope extension). Still
+> **10 services + Control Room** — no new service. Companion ADR:
+> [0011](../adr/0011-external-payments-edge.md). Companion contract schemas in `/contract`.
+
+**Q17.1 — Gift cards/vouchers and online payment are now wanted. How far does online payment open?**
+A: Confined to **loading stored value**. The user expanded "gift cards" into a **prepaid
+wallet**: load money online and **spend it on everything** (food, sessions, …) at any POS and
+online.
+→ The **only** online card operation is **topping up a wallet or buying a gift card**. All
+*spending* stays a **bus-side balance debit** or a POS terminal transaction — **never a fresh
+online card charge**. §8/OQ-4 is **narrowed, not broken**: spending still happens at the
+touchpoint, exactly as before.
+
+**Q17.2 — How does a synchronous PSP fit a bus-only system?**
+A: The bus-only rule governs comms **between Pitwall services**, not Pitwall↔outside-world.
+Pitwall already crosses external edges synchronously (Frontend⇄browsers, POS→VIES, Mailing→
+SMTP); a **PSP is a fourth external edge**.
+→ A thin **payments edge inside Frontend** is the sole speaker of the PSP's HTTPS. The PSP
+**webhook is external inbound** (like a browser POST or a VIES reply), **not** inter-service
+RPC, so **bus-only is preserved, not excepted** (≠ the ADR-0008 carve-out). PSP = **Mollie**
+(v1, behind a swappable port); card data never touches Pitwall (**PCI SAQ-A**).
+See [ADR-0011](../adr/0011-external-payments-edge.md).
+
+**Q17.3 — Who owns vouchers + online payment — Billing, or a new component?**
+A: **Frontend** hosts the payments edge; **Billing** owns the **stored-value ledger + VAT**
+(where gapless numbering and invoice logic already live). No 11th service.
+→ The edge emits **`payment.captured`** (frontend.events); Billing, as ledger system-of-record,
+credits the balance and emits the balance facts (**`wallet.topped_up`**, **`giftcard.issued`**,
+**`wallet.debited`**, **`giftcard.redeemed`**) to `billing.events`. The capture→event step is
+**outbox-buffered**, so a confirmed payment is never lost when the bus is down.
+
+**Q17.4 — One instrument or two? Redemption model?**
+A: **Two instruments, one ledger primitive.** An account **wallet** (keyed on `userId`) and a
+transferable **bearer gift card** (a redeemable code, no PII). A gift card is, in effect, an
+anonymous/transferable wallet.
+→ Stored value is a **balance** (not single-use): **partial spend** supported; spendable at
+**POS + online**; a gift-card code can be **loaded into a wallet or spent at the POS**.
+Redemption is **idempotent** (inbox + ledger guard) — no double-spend.
+
+**Q17.5 — VAT treatment of stored value?**
+A: **Multi-purpose voucher (MPV).** Stored value buys supplies at potentially different VAT
+rates (track time, bar), so the rate is not fixed at load.
+→ **Loading value is non-taxable** (a payment-on-account, no VAT at sale); **VAT is accounted
+at spend/redemption** through Billing's existing document logic (FR61–65, FR81–82) — reusing
+the existing VAT machinery rather than a parallel engine. A single-purpose voucher (VAT at
+sale) was rejected: it would lock the balance to one supply/rate.
+
+**Q17.6 — Refunds, cancellation & expiry?**
+A: **Non-refundable** once the PSP capture settles; **cancellation only before capture**.
+→ Balances carry a **configurable expiry** with an **EU-compliant minimum validity**; expiry
+is **logged, never silently dropped**. A failed refund/expiry action dead-letters + alerts
+Control Room. Stored value falls under the **7-year financial retention** window (DG-1); a
+**wallet balance defers erasure** like an open tab (FR78); a **bearer gift card carries no PII**.
+
+**Q17.7 — E-money / PSD2 regulation?**
+A: **Out of scope** for this portfolio build.
+→ Spendable stored value can trigger EU e-money/PSD2 duties (KYC/AML, safeguarding) above
+thresholds. Pitwall treats stored value as a **closed-loop facility under a configurable
+balance cap**, no KYC/AML — a documented limitation, not a production-compliant wallet.

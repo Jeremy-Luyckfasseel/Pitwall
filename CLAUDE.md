@@ -36,7 +36,11 @@ Full picture: [`docs/analysis/01-architecture-overview.md`](docs/analysis/01-arc
 1. **No APIs between services. Communication is RabbitMQ-only.** No HTTP between
    services, no synchronous RPC as a primary pattern. The single, documented exception
    is Control Room → Mailing for the **bus-down alert** only
-   ([ADR-0008](docs/adr/0008-single-bus-down-api-exception.md)).
+   ([ADR-0008](docs/adr/0008-single-bus-down-api-exception.md)). Integration with
+   **external third parties** (VIES VAT validation; the **PSP payments edge** for online
+   stored value, [ADR-0011](docs/adr/0011-external-payments-edge.md)) happens at a
+   **designated edge** — the outside world, not an inter-service API — so it does **not**
+   breach this rule.
 2. **No HTTP `/health` endpoints.** Liveness is bus-only: 1 s heartbeats + the Control
    Room's self-ping ([ADR-0004](docs/adr/0004-bus-only-health-and-self-ping.md)).
 3. **Event-carried state transfer.** Each service keeps its **own local copy** of the
@@ -115,3 +119,6 @@ adds an ADR.
 > PRD-phase decisions (admin/operator control plane, data governance & privacy,
 > anonymous POS sales + VIES invoicing, operator-started sessions) are recorded in Q&A
 > **Rounds 13–16** and [ADR-0009](docs/adr/0009-data-governance.md)/[ADR-0010](docs/adr/0010-admin-operator-control-plane.md).
+> **Online stored value** (wallets + gift cards via the Frontend **payments edge**;
+> online card payment confined to *loading* value, all spending a bus-side balance debit)
+> is **Round 17** + [ADR-0011](docs/adr/0011-external-payments-edge.md).

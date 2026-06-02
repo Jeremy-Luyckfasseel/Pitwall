@@ -1,0 +1,18 @@
+{
+  "id": "a1b2c3d4-1111-4a3f-9e98-0c2d4f6a8b01",
+  "type": "payment.captured",
+  "source": "frontend",
+  "schemaVersion": 1,
+  "occurredAt": "2026-06-02T18:12:04.000Z",
+  "correlationId": "a1b2c3d4-1111-4a3f-9e98-0c2d4f6a8b01",
+  "causationId": null,
+  "data": {
+    "paymentId": "tr_mollie_7Hf3k9Qz",
+    "provider": "mollie",
+    "purpose": "wallet_topup",
+    "userId": "3f29c0aa-9d51-4b2e-8a77-1c6b0e2d4f55",
+    "amount": 50.0,
+    "currency": "EUR",
+    "capturedAt": "2026-06-02T18:12:04.000Z"
+  }
+}

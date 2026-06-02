@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/billing/giftcard.issued.v1.schema.json",
+  "title": "billing / giftcard.issued (v1) data payload",
+  "description": "Billing (stored-value ledger SoT) ISSUED a bearer gift card after a confirmed purchase (Round 17, ADR-0011). A gift card is an anonymous, transferable stored-value balance redeemed by code — it carries NO PII. Published to 'billing.events' with routing key 'giftcard.issued'; caused by a 'payment.captured' (purpose=giftcard_purchase). Consumed by Bar/POS (local redemption table), Frontend (show in account), Mailing (deliver the code to the recipient).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["giftCardId", "code", "amount", "currency", "sourcePaymentId", "at"],
+  "properties": {
+    "giftCardId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Stable id for the gift card in the ledger."
+    },
+    "code": {
+      "type": "string",
+      "description": "Bearer redemption code (the secret presented at redemption). No PII."
+    },
+    "amount": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Initial balance, currency major units. Non-taxable at issue (MPV)."
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$",
+      "description": "ISO 4217 code, e.g. 'EUR'."
+    },
+    "expiresAt": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Configurable expiry (RFC3339 UTC) with an EU-compliant minimum validity; null = no expiry."
+    },
+    "sourcePaymentId": {
+      "type": "string",
+      "description": "The payment.captured paymentId that funded this gift card (trace + idempotency)."
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the gift card was issued (RFC3339 UTC)."
+    }
+  }
+}
