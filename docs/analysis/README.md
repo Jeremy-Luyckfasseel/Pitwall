@@ -25,7 +25,7 @@ production runs on a single VPS, dev runs locally.
 | Service | Owns |
 |---|---|
 | [Timing](./services/timing.md) | scans, lap times, PR detection, simulator |
-| [Identity](./services/identity.md) | canonical `userId` (one per person) |
+| [Identity](./services/identity.md) | canonical `masterId` (one per person) |
 | [Driver](./services/driver.md) | racing profile + lap history + canonical PR |
 | [CRM](./services/crm.md) | person/company, contacts, consent, loyalty |
 | [Booking](./services/booking.md) | session schedule + capacity |

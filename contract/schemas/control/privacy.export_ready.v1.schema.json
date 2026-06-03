@@ -4,15 +4,15 @@
   "title": "control / privacy.export_ready (v1) data payload",
   "description": "The assembled data-export bundle is ready. Published by the Control Room (privacy aggregator) to the 'control.events' exchange with routing key 'privacy.export_ready'; consumed by Mailing to deliver the export to the data subject. (ADR-0009.)",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["requestId", "userId", "documentRef", "at"],
+  "additionalProperties": true,
+  "required": ["requestId", "masterId", "documentRef", "at"],
   "properties": {
     "requestId": {
       "type": "string",
       "format": "uuid",
       "description": "The originating privacy.export_requested id."
     },
-    "userId": {
+    "masterId": {
       "type": "string",
       "format": "uuid",
       "description": "The data subject the export belongs to."

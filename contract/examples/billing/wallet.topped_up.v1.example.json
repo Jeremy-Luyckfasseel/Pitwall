@@ -3,14 +3,15 @@
   "type": "wallet.topped_up",
   "source": "billing",
   "schemaVersion": 1,
+  "envelopeVersion": 1,
   "occurredAt": "2026-06-02T18:12:05.200Z",
   "correlationId": "a1b2c3d4-1111-4a3f-9e98-0c2d4f6a8b01",
   "causationId": "a1b2c3d4-1111-4a3f-9e98-0c2d4f6a8b01",
   "data": {
-    "userId": "3f29c0aa-9d51-4b2e-8a77-1c6b0e2d4f55",
-    "amount": 50.0,
+    "masterId": "3f29c0aa-9d51-4b2e-8a77-1c6b0e2d4f55",
+    "amount": 5000,
     "currency": "EUR",
-    "balanceAfter": 50.0,
+    "balanceAfter": 5000,
     "sourcePaymentId": "tr_mollie_7Hf3k9Qz",
     "at": "2026-06-02T18:12:05.200Z"
   }

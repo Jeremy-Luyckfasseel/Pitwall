@@ -2,20 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pitwall/contract/envelope.schema.json",
   "title": "Pitwall message envelope",
-  "description": "Every message on the bus uses this envelope. The event-specific payload lives under `data` and is validated against its own schema based on `type` + `schemaVersion`.",
+  "description": "Every message on the bus uses this envelope. The event-specific payload lives under `data` and is validated against its own schema based on `type` + `schemaVersion`. All JSON field names are camelCase; all UUIDs are lowercase canonical (readers normalize-then-validate); all timestamps are RFC3339 UTC with exactly 3-digit milliseconds and a literal `Z`. See contract/README.md (Wire Contract Rules).",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["id", "type", "source", "schemaVersion", "occurredAt", "correlationId", "data"],
+  "additionalProperties": true,
+  "required": ["id", "type", "source", "schemaVersion", "envelopeVersion", "occurredAt", "correlationId", "data"],
   "properties": {
     "id": {
       "type": "string",
       "format": "uuid",
-      "description": "Unique per message. Used by the idempotent inbox to dedupe."
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "Unique per message; the idempotent inbox dedupe key. Lowercase canonical UUID; UUID v7 RECOMMENDED (time-ordered for cheap inbox indexes + replay ordering)."
     },
     "type": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
-      "description": "<entity>.<action>, matches the routing key, e.g. 'lap.recorded'."
+      "description": "<entity>.<action>, matches the routing key, e.g. 'lap.recorded'. Facts are past-tense; intents end '.requested'."
     },
     "source": {
       "type": "string",
@@ -24,22 +25,30 @@
     "schemaVersion": {
       "type": "integer",
       "minimum": 1,
-      "description": "Bumped only on a breaking change to the data payload."
+      "description": "Payload schema version. Bumped only on a BREAKING change to the data payload; additive changes do not bump it (tolerant reader)."
+    },
+    "envelopeVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Version of the envelope itself (distinct from the payload's schemaVersion), so the envelope shape can evolve independently. v1 today."
     },
     "occurredAt": {
       "type": "string",
       "format": "date-time",
-      "description": "RFC3339 UTC time the fact happened."
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      "description": "When the fact happened. RFC3339 UTC, exactly 3-digit milliseconds, literal 'Z' (never '+00:00')."
     },
     "correlationId": {
       "type": "string",
       "format": "uuid",
-      "description": "Created once at the start of a flow and copied onto every downstream event."
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "Created once at the start of a flow and copied verbatim onto every downstream event (and every log line). Lowercase canonical UUID."
     },
     "causationId": {
       "type": ["string", "null"],
       "format": "uuid",
-      "description": "Id of the message that directly caused this one. Null for flow-originating events."
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "Id of the message that directly caused this one. Null for flow-originating events. Lowercase canonical UUID when present."
     },
     "data": {
       "type": "object",

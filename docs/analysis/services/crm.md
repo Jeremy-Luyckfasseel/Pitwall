@@ -9,7 +9,7 @@ Model the human/commercial side of a customer — distinct from Driver's racing 
 and the company/B2B relationships that Billing and Mailing depend on.
 
 ## System of record (owns)
-- **Person**: legal name, email, phone, address — keyed on `userId`.
+- **Person**: legal name, email, phone, address — keyed on `masterId`.
 - **Company**: name, billing details (VAT, address), keyed on `companyId`.
 - **Employee links**: person ↔ company, and **billTo** (who/what is invoiced to the
   company).
@@ -19,7 +19,7 @@ and the company/B2B relationships that Billing and Mailing depend on.
 ## Events
 **Publishes** (`crm.events`): `crm.person_updated`, `crm.company_updated`,
 `crm.employee_linked`, `crm.consent_changed`.
-**Consumes**: `identity.resolved` (create a person on a new `userId`),
+**Consumes**: `identity.resolved` (create a person on a new `masterId`),
 `session.ended`/`invoice.issued` (loyalty accrual), Frontend profile-edit intents.
 
 ## Why it matters to others
@@ -28,7 +28,7 @@ and the company/B2B relationships that Billing and Mailing depend on.
 - **Mailing** checks `marketingConsent` before any non-transactional email.
 
 ## Key flow
-1. New `userId` → CRM creates a person record (contact details filled from
+1. New `masterId` → CRM creates a person record (contact details filled from
    registration/profile intents).
 2. Person linked to a company → `crm.employee_linked` (Billing learns billTo).
 3. Consent toggled in Frontend → `crm.consent_changed` (Mailing respects it).

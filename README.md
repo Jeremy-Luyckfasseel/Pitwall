@@ -43,7 +43,7 @@ representative scenario chosen to exercise the architecture.
 | Service | System of record |
 |---|---|
 | **Timing** | scans, lap times, PR detection, the simulator |
-| **Identity** | the one canonical `userId` per person (email-deduped) |
+| **Identity** | the one canonical `masterId` (master UUID) per person (email-deduped) |
 | **Driver** | racing profile, full lap history, canonical PR |
 | **CRM** | person/company, contacts, consent, loyalty |
 | **Booking** | session/heat schedule + capacity |

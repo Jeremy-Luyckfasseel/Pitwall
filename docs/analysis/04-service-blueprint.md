@@ -43,10 +43,10 @@
 - [ ] Propagates `correlationId` from the triggering event onto every event it emits.
 
 ### Data governance ([ADR-0009](../adr/0009-data-governance.md))
-- [ ] Consumes `privacy.erasure_requested`; **deletes** its local slice for the `userId`
+- [ ] Consumes `privacy.erasure_requested`; **deletes** its local slice for the `masterId`
       (Billing **anonymizes** under legal retention), writes a **tombstone** so a replayed/
-      late event can't resurrect it, and emits `privacy.erased {userId, service, mode}`.
-- [ ] Consumes `privacy.export_requested`; emits `privacy.data_provided {userId, service,
+      late event can't resurrect it, and emits `privacy.erased {masterId, service, mode}`.
+- [ ] Consumes `privacy.export_requested`; emits `privacy.data_provided {masterId, service,
       payload}` with its slice of the subject's data.
 - [ ] Stores only the **minimum PII** it needs (data minimization) and honors the retention
       window for the data it owns (financial 7 y · operational active+2 y · raw logs 90 d).

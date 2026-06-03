@@ -16,14 +16,14 @@ The bar is simply another **event producer** on the bus.
   gift-card codes without a synchronous call (Round 17, [ADR-0011](../../adr/0011-external-payments-edge.md)).
 
 ## Behaviour
-- **Identified sale:** staff (or a kiosk) select a present driver (by QR/`userId`) and items
-  → publish `bar.order_placed {orderId, userId, items[], total, at}` (Billing adds to the
+- **Identified sale:** staff (or a kiosk) select a present driver (by QR/`masterId`) and items
+  → publish `bar.order_placed {orderId, masterId, items[], total, at}` (Billing adds to the
   tab).
-- **Anonymous sale (Round 15):** a walk-in buys food/drinks with **no `userId`** → publish
-  `bar.order_placed` with `userId` **absent/null**; Billing settles it immediately (no tab,
+- **Anonymous sale (Round 15):** a walk-in buys food/drinks with **no `masterId`** → publish
+  `bar.order_placed` with `masterId` **absent/null**; Billing settles it immediately (no tab,
   no PII). An anonymous buyer who wants an invoice must declare it **before paying**.
 - **Pay from stored value (Round 17):** a sale can be settled from a **wallet** (present
-  driver's `userId`) or by **redeeming a gift-card code** — a **balance debit**, never a card
+  driver's `masterId`) or by **redeeming a gift-card code** — a **balance debit**, never a card
   charge. The POS marks the order as wallet/gift-card payment; **Billing** applies the debit
   and emits `wallet.debited` / `giftcard.redeemed`. **Partial** coverage falls back to normal
   POS payment for the remainder (no dead end). The exact spend-intent wiring is an
@@ -33,7 +33,7 @@ The bar is simply another **event producer** on the bus.
 
 ## Events
 **Publishes** (`bar.events`): `bar.order_placed`.
-**Consumes**: `identity.resolved` (resolve a walk-in to `userId` if needed),
+**Consumes**: `identity.resolved` (resolve a walk-in to `masterId` if needed),
 `driver.checked_in` (know who's currently present),
 **`wallet.topped_up`/`wallet.debited`/`giftcard.issued`/`giftcard.redeemed`** (local balance
 copy for stored-value payment + code validation, ADR-0011).
@@ -42,7 +42,7 @@ copy for stored-value payment + code validation, ADR-0011).
 | Scenario | Handled outcome |
 |---|---|
 | Order for a driver with no open tab | Still publish `bar.order_placed`; Billing opens/attaches a tab retroactively. |
-| Order for an unknown person | Resolve via `identity.lookup_requested`; until then, hold the order against the raw token. |
+| Order for a buyer with no account | No raw-token-buffered tab (Round 19): handle as an **anonymous immediately-settled sale** (no `masterId`, no PII). To go on a tab — or get a formal invoice — the buyer must be a registered driver with a `masterId` (register-first). |
 | Duplicate submit (double-tap) | Each order has a client-side id; Billing's inbox dedupes. |
 | RabbitMQ down | Orders persisted locally + queued in outbox; published on recovery so nothing is lost. |
 | Restart | Local order store durable; unpublished orders flushed from the outbox. |

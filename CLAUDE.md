@@ -46,7 +46,7 @@ Full picture: [`docs/analysis/01-architecture-overview.md`](docs/analysis/01-arc
 3. **Event-carried state transfer.** Each service keeps its **own local copy** of the
    data it needs and must keep working when peers *or RabbitMQ* are down
    ([ADR-0002](docs/adr/0002-event-carried-state-transfer.md)).
-4. **One canonical `userId`** issued solely by Identity; every service joins on it and
+4. **One canonical `masterId`** issued solely by Identity; every service joins on it and
    never mints its own ([ADR-0003](docs/adr/0003-identity-as-uuid-issuer.md)).
 5. **Validate every message** (in and out) against `/contract` JSON Schemas. Invalid →
    log + dead-letter, never silently drop.
@@ -57,6 +57,17 @@ Full picture: [`docs/analysis/01-architecture-overview.md`](docs/analysis/01-arc
    and **deletes/anonymizes** its slice (a tombstone blocks resurrection), honors retention
    (7 y financial · 2 y operational · 90 d raw logs), and minimizes PII
    ([ADR-0009](docs/adr/0009-data-governance.md)).
+
+> **Wire contract rules (digest — full spec: [`contract/README.md`](contract/README.md)).** The wire
+> is canonical across Go/Python/TS; internal code stays idiomatic. **MUST:** camelCase field names;
+> the standard envelope (`id`, `type`, `source`, `schemaVersion`, `envelopeVersion`, `occurredAt`,
+> `correlationId`, `causationId`, `data`); canonical person id **`masterId`** (lowercase UUID v4);
+> envelope `id` lowercase UUID (v7 recommended); timestamps `YYYY-MM-DDTHH:MM:SS.mmmZ`; money as
+> **integer minor units (cents)** + ISO-4217 `currency` (no floats on the wire); enum string fields
+> pinned via JSON Schema `enum`. **MUST NOT:** `additionalProperties: false` on event objects (breaks
+> tolerant-reader / additive evolution); `userId` (renamed to `masterId`, [Q19.1]); the
+> raw-token-buffer walk-in model (walk-ins are **register-first**, Q6.4 / Q19.2). Enforced in CI by
+> `scripts/check-corpus-coherence.sh` + `scripts/validate-contract.py`.
 
 ## 3. The system (10 services + Control Room)
 

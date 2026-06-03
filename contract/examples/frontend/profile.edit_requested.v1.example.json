@@ -3,12 +3,13 @@
   "type": "profile.edit_requested",
   "source": "frontend",
   "schemaVersion": 1,
+  "envelopeVersion": 1,
   "occurredAt": "2026-06-01T10:05:00.000Z",
   "correlationId": "d8a3e2c4-1f5b-4a79-ae32-4c6d8f0a2b34",
   "causationId": null,
   "data": {
     "requestId": "d8a3e2c4-1f5b-4a79-ae32-4c6d8f0a2b34",
-    "userId": "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21",
+    "masterId": "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21",
     "racing": {
       "nickname": "Sofie-S",
       "racingNumber": "27"

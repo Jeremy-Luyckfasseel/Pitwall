@@ -3,14 +3,15 @@
   "type": "wallet.debited",
   "source": "billing",
   "schemaVersion": 1,
+  "envelopeVersion": 1,
   "occurredAt": "2026-06-02T19:41:30.000Z",
   "correlationId": "9c7e1d20-aa11-4f3b-8e22-7d6c0a1b2c34",
   "causationId": "d4a9e8c0-7f1b-4a3f-9e98-0c2d4f6a8b90",
   "data": {
-    "userId": "3f29c0aa-9d51-4b2e-8a77-1c6b0e2d4f55",
-    "amount": 8.5,
+    "masterId": "3f29c0aa-9d51-4b2e-8a77-1c6b0e2d4f55",
+    "amount": 850,
     "currency": "EUR",
-    "balanceAfter": 41.5,
+    "balanceAfter": 4150,
     "reason": "pos_sale",
     "ref": "pos-terminal-1-000874",
     "at": "2026-06-02T19:41:30.000Z"

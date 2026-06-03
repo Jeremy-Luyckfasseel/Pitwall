@@ -4,18 +4,18 @@
   "title": "billing / wallet.topped_up (v1) data payload",
   "description": "Billing (the stored-value ledger system-of-record) CREDITED a wallet after a confirmed load (Round 17, ADR-0011). Published to 'billing.events' with routing key 'wallet.topped_up'; caused by a 'payment.captured'. Consumed by Frontend (account balance read-model), Bar/POS (local balance copy for spend), Control Room. 'balanceAfter' carries the authoritative balance (ECST). Non-taxable load (MPV).",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["userId", "amount", "currency", "balanceAfter", "sourcePaymentId", "at"],
+  "additionalProperties": true,
+  "required": ["masterId", "amount", "currency", "balanceAfter", "sourcePaymentId", "at"],
   "properties": {
-    "userId": {
+    "masterId": {
       "type": "string",
       "format": "uuid",
-      "description": "Wallet owner (canonical userId)."
+      "description": "Wallet owner (canonical masterId)."
     },
     "amount": {
-      "type": "number",
+      "type": "integer",
       "exclusiveMinimum": 0,
-      "description": "Amount credited, currency major units."
+      "description": "Amount credited, currency MINOR units (integer cents)."
     },
     "currency": {
       "type": "string",
@@ -23,7 +23,7 @@
       "description": "ISO 4217 code, e.g. 'EUR'."
     },
     "balanceAfter": {
-      "type": "number",
+      "type": "integer",
       "minimum": 0,
       "description": "Authoritative wallet balance after this credit (ECST: consumers replace, not accumulate)."
     },

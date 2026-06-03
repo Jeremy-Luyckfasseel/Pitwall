@@ -51,8 +51,8 @@ synchronous HTTPS:
 
 ## Identity interplay
 Frontend never mints user ids. On registration it stores credentials locally, then
-publishes `identity.lookup_requested {email}`; on `identity.resolved {userId}` it links
-the credential record to the canonical `userId`. "Already registered?" is detected from
+publishes `identity.lookup_requested {email}`; on `identity.resolved {masterId}` it links
+the credential record to the canonical `masterId`. "Already registered?" is detected from
 Frontend's **own** credential store.
 
 ## Events

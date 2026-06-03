@@ -46,7 +46,7 @@ queries another at request time**. Instead:
 
 - Each service that produces data publishes the **full relevant state** in its events.
 - Each consumer keeps its **own local copy** (read-model) of just the slice it needs,
-  keyed on the canonical `userId`.
+  keyed on the canonical `masterId`.
 - Reads always hit the local copy — fast, and available even during an outage.
 - Writes use the **outbox pattern**: the state change and the outgoing event are
   persisted in the same local transaction, then a relay publishes to RabbitMQ and
@@ -57,20 +57,20 @@ queries another at request time**. Instead:
 Consequence: the system is **eventually consistent**, which is acceptable and
 expected. See [ADR-0002](../adr/0002-event-carried-state-transfer.md).
 
-## 5. Identity & the canonical `userId`
+## 5. Identity & the canonical `masterId`
 
-A single **Identity** service is the *sole issuer* of a canonical `userId` (UUID) —
-exactly **one per person**. Every other service stores that `userId` as its join key
+A single **Identity** service is the *sole issuer* of a canonical `masterId` (UUID) —
+exactly **one per person**. Every other service stores that `masterId` as its join key
 and never mints its own per-user id. This guarantees all services are talking about
 the same person.
 
-- Identity stores only `userId` + a natural key (email) + status + timestamps.
+- Identity stores only `masterId` + a natural key (email) + status + timestamps.
   **No passwords, no rich profile, no fuzzy merging.**
-- A service that needs a `userId` publishes `identity.lookup_requested {requestId,
-  email}`; Identity returns `identity.resolved {requestId, email, userId}` — minting a
+- A service that needs a `masterId` publishes `identity.lookup_requested {requestId,
+  email}`; Identity returns `identity.resolved {requestId, email, masterId}` — minting a
   new UUID if the email is unknown, reusing the existing one if not. The new-vs-
   returning decision lives entirely inside Identity; consumers idempotently upsert.
-- The `userId` is **embedded directly in the QR code**, so Timing reads it at the gate
+- The `masterId` is **embedded directly in the QR code**, so Timing reads it at the gate
   with no lookup.
 
 See [ADR-0003](../adr/0003-identity-as-uuid-issuer.md).
@@ -94,8 +94,8 @@ See [ADR-0003](../adr/0003-identity-as-uuid-issuer.md).
 
 | # | Service | Owns (system of record) | Doc |
 |---|---------|-------------------------|-----|
-| 1 | **Timing** | scans, lap times, PR detection, transponder→userId map, simulator | [timing](./services/timing.md) |
-| 2 | **Identity** | canonical `userId`, email dedupe | [identity](./services/identity.md) |
+| 1 | **Timing** | scans, lap times, PR detection, transponder→masterId map, simulator | [timing](./services/timing.md) |
+| 2 | **Identity** | canonical `masterId`, email dedupe | [identity](./services/identity.md) |
 | 3 | **Driver** | racing profile + full lap history + canonical PR | [driver](./services/driver.md) |
 | 4 | **CRM** | person/company, contacts, consent, loyalty | [crm](./services/crm.md) |
 | 5 | **Booking** | session/heat schedule + capacity | [booking](./services/booking.md) |

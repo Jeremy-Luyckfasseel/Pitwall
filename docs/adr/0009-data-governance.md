@@ -17,13 +17,13 @@ else in Pitwall — **event-driven, choreographed, no new service**.
 - **Retention** (configurable): financial/invoices **7 years** (Belgian accounting law);
   operational/racing data **while active + 2 years**; raw scan/transponder logs **90 days**.
 - **Erasure** (right-to-be-forgotten): Frontend publishes `privacy.erasure_requested
-  {userId}`; **every service** deletes (or, for Billing under legal retention,
+  {masterId}`; **every service** deletes (or, for Billing under legal retention,
   **anonymizes** — keep invoice number/amounts/VAT/date, null the PII) its local slice and
-  emits `privacy.erased {userId, service, mode}`. The **Control Room** (existing aggregator)
-  tracks completion. An erased `userId` becomes a **tombstone** so replayed/late events
+  emits `privacy.erased {masterId, service, mode}`. The **Control Room** (existing aggregator)
+  tracks completion. An erased `masterId` becomes a **tombstone** so replayed/late events
   cannot resurrect it. Erasure **defers** while a tab is open / session active.
 - **Export/portability**: `privacy.export_requested` → each service emits
-  `privacy.data_provided {userId, service, payload}` → Control Room assembles →
+  `privacy.data_provided {masterId, service, payload}` → Control Room assembles →
   `privacy.export_ready` → Mailing delivers.
 - **Audit**: append-only trail of consent/erasure/export actions, carrying `correlationId`
   **and the acting identity** (driver or admin actor).

@@ -4,7 +4,7 @@
   "title": "billing / giftcard.redeemed (v1) data payload",
   "description": "Billing (stored-value ledger SoT) REDEEMED a bearer gift card — either loaded into a wallet or spent directly at the POS (Round 17, ADR-0011). Published to 'billing.events' with routing key 'giftcard.redeemed'. Redemption is idempotent (inbox + ledger guard): a code cannot be double-spent. Consumed by Frontend, Bar/POS (local balance copy), Control Room. Partial redemption supported via 'balanceAfter'.",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": ["giftCardId", "mode", "amount", "currency", "balanceAfter", "at"],
   "properties": {
     "giftCardId": {
@@ -18,9 +18,9 @@
       "description": "loaded_to_wallet = balance moved into a wallet; spent = redeemed directly against a POS charge."
     },
     "amount": {
-      "type": "number",
+      "type": "integer",
       "exclusiveMinimum": 0,
-      "description": "Amount redeemed in this action, currency major units."
+      "description": "Amount redeemed in this action, currency MINOR units (integer cents)."
     },
     "currency": {
       "type": "string",
@@ -28,14 +28,14 @@
       "description": "ISO 4217 code, e.g. 'EUR'."
     },
     "balanceAfter": {
-      "type": "number",
+      "type": "integer",
       "minimum": 0,
       "description": "Authoritative remaining balance on the gift card after this redemption (ECST)."
     },
-    "userId": {
+    "masterId": {
       "type": ["string", "null"],
       "format": "uuid",
-      "description": "Target/redeeming userId when mode=loaded_to_wallet (the wallet) or an identified driver spending at POS; null for an anonymous POS spend."
+      "description": "Target/redeeming masterId when mode=loaded_to_wallet (the wallet) or an identified driver spending at POS; null for an anonymous POS spend."
     },
     "at": {
       "type": "string",
