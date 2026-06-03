@@ -1,0 +1,26 @@
+# Keeps the docs/contract corpus internally coherent (golden rule) and the contract examples valid.
+# This is the "back-record CI grep-gate" + the example pass of the contract-test layer (Round 19).
+name: corpus-coherence
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  coherence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Corpus-coherence gate (no userId / no raw-token-buffer)
+        run: bash scripts/check-corpus-coherence.sh
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Validate contract examples
+        run: |
+          python -m pip install --quiet jsonschema
+          python scripts/validate-contract.py
