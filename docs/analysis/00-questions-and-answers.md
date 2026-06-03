@@ -702,3 +702,162 @@ A: **Out of scope** for this portfolio build.
 → Spendable stored value can trigger EU e-money/PSD2 duties (KYC/AML, safeguarding) above
 thresholds. Pitwall treats stored value as a **closed-loop facility under a configurable
 balance cap**, no KYC/AML — a documented limitation, not a production-compliant wallet.
+
+## Round 18 — Control Room: live message-flow view + AI remediation agent (PRD phase, 2026-06-02)
+
+> **Origin:** the UX run for **Surface 4 — the Control Room dashboard** (decisions D8 + D12 in
+> the UX `.decision-log.md`). Two items extend the Control Room beyond Round 4's design and were
+> flagged — not assumed — for an explicit decision, exactly as the gift-cards UX flag was in
+> Round 17. **Still 10 services + Control Room** — no new *bus* service (see Q18.3). Companion ADR:
+> [0012](../adr/0012-control-room-observability-and-ai-agent.md).
+
+**Q18.1 — The Control Room gains a live "Message Flow" view (a service-to-service event-flow
+diagram). How does it get the data — the Control Room doesn't observe arbitrary traffic today?**
+A: A **metadata-only bus observation tap**, in scope for the Control Room build.
+→ The Control Room adds a passive observer (a wildcard/firehose-style bind, or the broker's
+firehose tracer) that records only **routing metadata — `{from-service, event-type, to/consumers,
+timestamp}` — never message bodies/payloads**. That is enough to animate the graph + per-edge
+counts. **No PII** crosses the tap (payloads are never read); the stream is **sampleable** under
+load and **not persisted** beyond the rolling live window. The diagram is **logical** (publisher→
+consumer) with the honest caption that everything physically routes via RabbitMQ (ADR-0001).
+**Full-payload observation is explicitly rejected** (PII/volume/retention) — see §8.
+
+**Q18.2 — Jeremy also wants an AI agent that, on an alert, diagnoses the fault and opens a fix PR
+(or writes up likely causes). Is it in scope?**
+A: **Deferred — a decided, documented post-MVP capability.** It is recorded now (this round +
+ADR-0012 + a PRD post-MVP requirement) but **not built in the current MVP**; the core 10 services
++ Control Room build is unchanged. (Jeremy: "an extra, do it at the end.")
+→ Only its **Control Room footprint** is designed in the UX: a single **read-only one-line hint**
+per alert (a short diagnosis + a "proposed PR #NN" deep-link **out** to the agent's own page). The
+agent itself ships later.
+
+**Q18.3 — Does the AI agent break "10 services + Control Room — no 11th service"?**
+A: **No.** It is modeled as an **external ops/dev tool**, **outside** the Pitwall service count —
+**like CI/CD or the Timing/Bar simulators**, not a first-class bus service.
+→ It **observes** alerts at an allowed edge and **acts on GitHub** (open PR / write issue) — a
+**fifth external edge**, the same category as Frontend⇄browsers, POS→VIES, Mailing→SMTP, and the
+PSP payments edge (Round 17). So the non-negotiable holds verbatim; **no 11th bus service**, and
+no inter-service API. (An 11th first-class service, and folding it into the read-only Control Room,
+were both rejected — the former breaks the rule, the latter the Control Room's observe-only posture.)
+
+**Q18.4 — Guardrails for an AI that can change the codebase?**
+A: **Propose, never dispose.** The agent **never auto-merges to production**.
+→ It may only **open a pull request (or an issue)** for **human review + merge**; it runs with a
+**least-privilege, scoped GitHub token** (open PRs/issues only — no merge, no force-push, no deploy);
+its scope is **read-diagnose-suggest**. No autonomous change to running infrastructure. A documented
+safety boundary, not an autonomous remediation system.
+
+**Q18.5 — What does the agent consume to diagnose?**
+A: At minimum the **`alert.raised`** signal; optionally read-only context — **logs / the event
+store / the Round-18 message-flow metadata** — to form a diagnosis.
+→ Consumption is **read-only and diagnostic**; the agent is a *consumer/observer plus a GitHub-edge
+actor*, never a publisher of Pitwall domain events. Exact inputs are an ADR-0012 / build-time detail.
+
+## Round 19 — Architecture phase: master UUID, register-first, polyglot, AI assistant (2026-06-03)
+
+> Decisions taken during the **`bmad-create-architecture` workflow** (output:
+> `_bmad-output/planning-artifacts/architecture.md`), pressure-tested in multi-agent review. They
+> **extend and in places correct** earlier rounds. Per the golden rule they are recorded here before
+> building. Still **10 services + Control Room** (the AI assistant is an external ops tool, not a bus
+> service). Companion ADR: **[0013](../adr/0013-admin-ai-assistant.md)**; companion `/contract` rename
+> applied.
+
+**Q19.1 — What is the canonical person identifier called?**
+A: The **master UUID**, surfaced on the wire as the field **`masterId`** (renamed from `userId`).
+Identity remains its sole issuer (one per person; ADR-0003).
+→ `userId` → **`masterId`** renamed across **`/contract`** (envelope unaffected — it lives in `data`)
+and the **live spec docs** (`docs/analysis/01–04`, all service docs, `CLAUDE.md`, the PRD). The wire
+field is `masterId` (UUID v4, lowercase-hyphenated); envelope `id` is UUID v7. **History preserved:**
+Rounds 0–18 keep their original `userId` wording for the same concept (this round is the rename of
+record). ADR-0003's terminology to be refreshed to "master UUID".
+
+**Q19.2 — Walk-in identity: register-first, or a raw-token buffer? (Resolves reconcile finding B1.)**
+A: **Register-first is canonical** — exactly as [Q6.4](#round-6--timing-service) already decided.
+There is **no anonymous racing identity**.
+→ Identity is resolved **at check-in, before the driver goes on track** (counter/kiosk captures email
+→ `identity.lookup_requested` → on `identity.resolved` the `masterId` is bound to the QR/transponder
+that is then issued). A lap is **never emitted for an unresolved token**. An **unknown token at the
+start-finish line** is an **operator-surfaced exception** (held + flagged, never minted, never an
+anonymous lap, never dropped) — not a normal path. The earlier **raw-token-buffer-as-normal-path**
+reading in **FR39/FR51** and in `timing.md`/`bar-pos.md` sad-paths **contradicted Q6.4 and is
+corrected** (those texts updated this round). Amelia's seam-bug risk (orphaned laps with no join key)
+is thereby designed out.
+
+**Q19.3 — Anonymous sales vs the one-master-UUID rule. (Resolves reconcile finding B2.)**
+A: Absence of a `masterId` is permitted **only** for an **immediate-pay bar food/drink sale that
+issues no invoice** (the anonymous carve-out, FR49/FR81). **Any session and any formal invoice
+REQUIRES the `masterId`.**
+→ NFR15 ("every service joins on the canonical id") holds everywhere it matters; the lone exception is
+a walk-up POS line item that never enters the session or billing join. This is the precise rule that
+defuses the FR81-vs-NFR15 tension.
+
+**Q19.4 — Per-service languages (the polyglot showcase, kept solo-maintainable)?**
+A: **Three languages, organized as tiers** (Amelia's 2–3 cap; Go leans on the 7 GB RAM ceiling):
+**Go** (Timing, Identity, Leaderboard, Control Room — real-time/infra, low idle RAM), **Python**
+(Driver, CRM, Billing, Mailing — records/documents), **TypeScript** (Frontend, Booking, Bar/POS —
+experience/edge). Versions verified June 2026 (Go 1.26.4, Python 3.14.x, Node 24 LTS, Next.js 16.2.x).
+→ **Database-per-service stays real and read-write** (not a shared engine): **SQLite-by-default**
+(embedded, ~zero idle RAM), **PostgreSQL only for Billing** (financial integrity, gapless numbering,
+stored-value ledger). RAM (not disk, not time) is the binding constraint; disk is unconstrained.
+
+**Q19.5 — DLQ behaviour?**
+A: **TTL-based auto-retry** (a `<consumer>.<purpose>.retry` queue dead-lettering back to source) **plus
+a delivery-count cap → a terminal `<consumer>.<purpose>.parking` quarantine queue** + Control Room
+alert. TTL alone would loop poison messages forever; the cap terminates them.
+
+**Q19.6 — How is the Round-18 Message-Flow tap actually fed? (Pins ADR-0012's open mechanism.)**
+A: A **passive wildcard-bound observer queue** that reads **only envelope routing metadata**
+(`type`/`source`/inferred consumers/`occurredAt`) and **never the `data` payload** — chosen over the
+broker firehose tracer (which captures full messages → PII/volume risk). Sampleable, not persisted
+beyond the rolling window. No PII crosses the tap; no new contract event.
+
+**Q19.7 — The admin AI assistant: scope, safety, and how it stays bus-only?**
+A: An **admin chatbot** that is an **external ops tool** (outside the 10-services-+-Control-Room count —
+like CI or the simulators), optimized to be **always as correct as possible**, and **distinct from the
+Round-18 GitHub remediation bot** (opposite safety posture).
+→ **Reads (MVP):** the LLM never computes/invents figures — it maps natural language onto a **fixed,
+typed, versioned set of query functions** over a **dedicated CQRS reporting read-model** (a bus
+consumer built via the same ECST/idempotent-inbox machinery; carries a `last-synced` watermark and
+flags lag/bus-down rather than faking live — C1). A single **read-only MCP edge** (AI ↔ read-model);
+**never MCP-to-every-service** (live fan-out is less correct, slower, and breaks read-path fault
+tolerance). **Writes (phase two):** publish the **existing `frontend.events` admin intents** (same
+path as the admin UI — no new write path, no bus bypass); **destructive ops require an explicit human
+confirm**; every action audited (`correlationId` + acting identity = AI + invoking admin; DG-4).
+Recorded as **[ADR-0013](../adr/0013-admin-ai-assistant.md)**.
+
+**Q19.8 — MVP scope?**
+A: The MVP is the **full platform** — all 10 services + Control Room, with the **complete bus-only
+health model and all heartbeats in scope**. This is a **no-deadline** solo learning/portfolio build
+("all the time in the world"). Walking-skeleton-first (Identity → Timing → Leaderboard + Control Room
+heartbeats, surviving a mid-session bus kill) is the **build order**, not a scope limit. Post-MVP: AI
+writes (phase two) + the GitHub remediation bot (FR94); live Mollie may be stubbed.
+
+**Q19.9 — Anything from the architecture phase still to propagate?**
+A: Yes, tracked here so the corpus cannot silently drift:
+→ (a) **A7 (reconcile):** Q0.1's "no GDPR audits" deferral is **already superseded** by the
+[Round 16](#round-16--data-governance--privacy-prd-phase) amendment noted on Q0.1 — reaffirmed, no
+further action. (b) **Wire-hardening** decided in `architecture.md` (camelCase wire, RFC3339-`Z`
+millisecond timestamps, integer-cents money, enum value-sets, big-int-as-string, `envelopeVersion`,
+relaxing `additionalProperties:false` for additive evolution, masterId regex) is to be applied to
+`/contract` **incrementally** (the `masterId` rename landed this round). (c) **Durability:** a CI
+**grep-gate** should fail the build on `userId` / raw-token-buffer / register-first contradictions so
+the corpus stays coherent. (d) Add the **Wire Contract Rules digest** to `CLAUDE.md` + `CONTRIBUTING.md`.
+
+## Round 20 — Epics & stories phase: MVP boundary of the Admin AI Assistant (2026-06-04)
+
+> Decision taken during the **`bmad-create-epics-and-stories` workflow** (output:
+> `_bmad-output/planning-artifacts/epics.md`). Recorded here per the golden rule because it **resolves an
+> ambiguity** the architecture left open. Companion: **[ADR-0013](../adr/0013-admin-ai-assistant.md)** §4
+> corrected to match.
+
+**Q20.1 — Is the Admin AI Assistant's read-only analytics in the MVP, or post-MVP?**
+A: **Post-MVP.** The **entire** `tools/admin-ai-assistant/` — read-only analytics (reporting CQRS
+read-model + read-only MCP edge + NL→query-function mapping) **and** writes-via-intents (phase two) —
+is deferred to the **post-MVP shelf**, alongside the Round-18 GitHub remediation bot (FR94). The MVP is
+exactly the **10 services + Control Room** (Q19.8). This resolves the architecture's internal ambiguity
+— `architecture.md` called read analytics "(read-only MVP)" in the assistant's own phasing while filing
+the whole tool under "Future (post-MVP)"; the assistant carries **no FR number**, confirming it sits
+outside the MVP FR set. The Control Room's one-line **AI hint footprint** (UX-DR22) is still designed in
+the MVP (Epic 12); only the assistant tool itself ships later.
+→ **ADR-0013 §4 updated** ("Read analytics = MVP" → "post-MVP shelf"); epics.md post-MVP shelf cites
+this round.
