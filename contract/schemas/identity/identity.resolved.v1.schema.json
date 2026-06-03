@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pitwall/contract/identity/identity.resolved.v1.schema.json",
   "title": "identity / identity.resolved (v1) data payload",
-  "description": "Identity's reply to an identity.lookup_requested. Returns the canonical userId for an email (minted if new, reused if known). No isNew flag by design.",
+  "description": "Identity's reply to an identity.lookup_requested. Returns the canonical masterId for an email (minted if new, reused if known). No isNew flag by design.",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["requestId", "email", "userId"],
+  "additionalProperties": true,
+  "required": ["requestId", "email", "masterId"],
   "properties": {
     "requestId": {
       "type": "string",
@@ -17,10 +17,10 @@
       "format": "email",
       "description": "The natural key that was looked up."
     },
-    "userId": {
+    "masterId": {
       "type": "string",
       "format": "uuid",
-      "description": "The canonical userId. Consumers idempotently upsert on this."
+      "description": "The canonical masterId. Consumers idempotently upsert on this."
     }
   }
 }

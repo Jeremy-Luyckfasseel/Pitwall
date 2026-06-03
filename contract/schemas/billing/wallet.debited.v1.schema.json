@@ -4,18 +4,18 @@
   "title": "billing / wallet.debited (v1) data payload",
   "description": "Billing (stored-value ledger SoT) DEBITED a wallet for a spend — a balance debit modelled on the bus, NEVER a fresh online card charge (Round 17, ADR-0011). Published to 'billing.events' with routing key 'wallet.debited'. Consumed by Frontend (balance read-model), Bar/POS (local balance copy), Control Room. Partial spend supported; insufficient balance is not represented here (the remainder falls back to normal POS payment). VAT is accounted at this spend via Billing's existing document logic (MPV).",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["userId", "amount", "currency", "balanceAfter", "reason", "at"],
+  "additionalProperties": true,
+  "required": ["masterId", "amount", "currency", "balanceAfter", "reason", "at"],
   "properties": {
-    "userId": {
+    "masterId": {
       "type": "string",
       "format": "uuid",
-      "description": "Wallet owner (canonical userId)."
+      "description": "Wallet owner (canonical masterId)."
     },
     "amount": {
-      "type": "number",
+      "type": "integer",
       "exclusiveMinimum": 0,
-      "description": "Amount debited, currency major units."
+      "description": "Amount debited, currency MINOR units (integer cents)."
     },
     "currency": {
       "type": "string",
@@ -23,7 +23,7 @@
       "description": "ISO 4217 code, e.g. 'EUR'."
     },
     "balanceAfter": {
-      "type": "number",
+      "type": "integer",
       "minimum": 0,
       "description": "Authoritative wallet balance after this debit (ECST)."
     },

@@ -3,12 +3,13 @@
   "type": "identity.resolved",
   "source": "identity",
   "schemaVersion": 1,
+  "envelopeVersion": 1,
   "occurredAt": "2026-05-31T13:55:02.001Z",
   "correlationId": "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
   "causationId": "aa11bb22-cc33-4dd4-8ee5-ff6677889900",
   "data": {
     "requestId": "aa11bb22-cc33-4dd4-8ee5-ff6677889900",
     "email": "jeremy@example.com",
-    "userId": "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21"
+    "masterId": "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21"
   }
 }

@@ -2,19 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pitwall/contract/bar/bar.order_placed.v1.schema.json",
   "title": "bar / bar.order_placed (v1) data payload",
-  "description": "A bar/POS order to charge. Published to the 'bar.events' exchange with routing key 'bar.order_placed'; consumed by Billing. 'userId' is OPTIONAL: when absent the sale is ANONYMOUS (no tab, immediately settled, no PII) per Round 15. Optional userId is additive/tolerant-reader-safe, so this stays schemaVersion 1.",
+  "description": "A bar/POS order to charge. Published to the 'bar.events' exchange with routing key 'bar.order_placed'; consumed by Billing. 'masterId' is OPTIONAL: when absent the sale is ANONYMOUS (no tab, immediately settled, no PII) per Round 15. Optional masterId is additive/tolerant-reader-safe, so this stays schemaVersion 1.",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": ["orderId", "items", "total", "at"],
   "properties": {
     "orderId": {
       "type": "string",
       "description": "Client-side id for inbox dedupe of double-taps."
     },
-    "userId": {
+    "masterId": {
       "type": ["string", "null"],
       "format": "uuid",
-      "description": "Canonical userId if the order is against a driver's tab. ABSENT/null = an anonymous immediately-settled sale (no tab, no PII)."
+      "description": "Canonical masterId if the order is against a driver's tab. ABSENT/null = an anonymous immediately-settled sale (no tab, no PII)."
     },
     "items": {
       "type": "array",
@@ -22,19 +22,19 @@
       "description": "Line items in the order.",
       "items": {
         "type": "object",
-        "additionalProperties": false,
+        "additionalProperties": true,
         "required": ["name", "quantity", "unitPrice"],
         "properties": {
           "name": { "type": "string", "description": "Product name." },
           "quantity": { "type": "integer", "minimum": 1 },
-          "unitPrice": { "type": "number", "minimum": 0, "description": "Price per unit (currency major units)." }
+          "unitPrice": { "type": "integer", "minimum": 0, "description": "Price per unit (currency MINOR units (integer cents))." }
         }
       }
     },
     "total": {
-      "type": "number",
+      "type": "integer",
       "minimum": 0,
-      "description": "Order total (currency major units)."
+      "description": "Order total (currency MINOR units (integer cents))."
     },
     "at": {
       "type": "string",

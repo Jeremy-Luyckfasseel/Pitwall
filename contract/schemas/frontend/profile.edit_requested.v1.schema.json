@@ -4,22 +4,22 @@
   "title": "frontend / profile.edit_requested (v1) data payload",
   "description": "A driver editing their own profile. Published to the 'frontend.events' exchange with routing key 'profile.edit_requested'; Driver applies racing fields, CRM applies contact + consent. Each consumer updates only the fields it owns. (Q1.5 / Q8.3.)",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["requestId", "userId", "at"],
+  "additionalProperties": true,
+  "required": ["requestId", "masterId", "at"],
   "properties": {
     "requestId": {
       "type": "string",
       "format": "uuid",
       "description": "Correlates the edit intent with the resulting driver/crm events."
     },
-    "userId": {
+    "masterId": {
       "type": "string",
       "format": "uuid",
-      "description": "Canonical userId of the driver editing their profile."
+      "description": "Canonical masterId of the driver editing their profile."
     },
     "racing": {
       "type": ["object", "null"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "Driver-owned racing fields (applied by Driver).",
       "properties": {
         "nickname": { "type": "string", "description": "Leaderboard nickname." },
@@ -29,7 +29,7 @@
     },
     "contact": {
       "type": ["object", "null"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "CRM-owned contact fields (applied by CRM).",
       "properties": {
         "legalName": { "type": "string" },
@@ -40,7 +40,7 @@
     },
     "consent": {
       "type": ["object", "null"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "CRM-owned consent flags (applied by CRM).",
       "properties": {
         "marketingConsent": { "type": "boolean" }

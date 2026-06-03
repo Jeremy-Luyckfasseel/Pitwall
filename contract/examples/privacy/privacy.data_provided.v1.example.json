@@ -3,12 +3,13 @@
   "type": "privacy.data_provided",
   "source": "driver",
   "schemaVersion": 1,
+  "envelopeVersion": 1,
   "occurredAt": "2026-06-01T11:45:01.090Z",
   "correlationId": "f0c5a4e6-3b7d-4c9b-9a54-6e8f0b2c4d56",
   "causationId": "f0c5a4e6-3b7d-4c9b-9a54-6e8f0b2c4d56",
   "data": {
     "requestId": "f0c5a4e6-3b7d-4c9b-9a54-6e8f0b2c4d56",
-    "userId": "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21",
+    "masterId": "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21",
     "service": "driver",
     "payload": {
       "racingNumber": "27",
