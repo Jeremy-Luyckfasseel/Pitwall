@@ -15,7 +15,7 @@ individual on request) when the session ends.
 - **Charges**: session charges + bar orders.
 - **Invoices/receipts** and a **gapless sequential invoice-number** sequence.
 - **Stored-value ledger** (Round 17, [ADR-0011](../../adr/0011-external-payments-edge.md)):
-  the balances of **wallets** (keyed on `userId`) and **bearer gift cards** (by code) — one
+  the balances of **wallets** (keyed on `masterId`) and **bearer gift cards** (by code) — one
   ledger primitive, Billing is its **system-of-record**.
 - Local copies (ECST) of the bits of CRM it needs (company/billTo, contact) to address
   documents.
@@ -24,7 +24,7 @@ individual on request) when the session ends.
 1. `driver.checked_in` → **open a tab** (`tab.opened`).
 2. `bar.order_placed` → add bar items; session charge added too (`tab.item_added`).
 3. `session.ended` → **close the tab**, decide document type, assign an invoice number,
-   render a **PDF**, publish `invoice.issued {invoiceId, number, userId|companyId,
+   render a **PDF**, publish `invoice.issued {invoiceId, number, masterId|companyId,
    documentRef, total}` for Mailing to deliver.
 
 ## Document type & invoicing — POS channel (Round 15)
@@ -40,7 +40,7 @@ individual on request) when the session ends.
   issues a **credit/void + a new document**, never a silent duplicate — preserving the
   gapless ledger. **No dead end.**
 
-> **Anonymous POS sale** (`bar.order_placed` with **no `userId`**): recorded as an
+> **Anonymous POS sale** (`bar.order_placed` with **no `masterId`**): recorded as an
 > **immediately-settled** charge with **no tab** and **no PII**, still assigned a gapless
 > document number — receipt by default, invoice only if declared before payment.
 
@@ -67,7 +67,7 @@ owns every **balance** fact:
 ## Data governance ([ADR-0009](../../adr/0009-data-governance.md))
 On `privacy.erasure_requested`, Billing **anonymizes** (not deletes) any invoice within the
 **7-year** retention window: it keeps the number, amounts, VAT, and date but nulls
-name/address/email/`userId`, writes a tombstone, and emits `privacy.erased {mode:
+name/address/email/`masterId`, writes a tombstone, and emits `privacy.erased {mode:
 anonymized}`. Records outside retention are deleted. A **wallet with an outstanding balance
 defers erasure** like an open tab (FR78) — erasure never destroys live financial value; once
 settled/expired, the slice is anonymized under the financial-retention rule. **Bearer gift

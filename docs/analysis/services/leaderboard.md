@@ -31,6 +31,6 @@ local copy of the current session's standings + leaderboard nicknames (from Driv
 |---|---|
 | Lap arrives before `session.started` seen | Start an implicit board keyed on the lap's `sessionId`; reconcile when the start event arrives. |
 | Out-of-order / duplicate laps | Idempotent by message id; standings recomputed from the best-known set. |
-| Missing nickname | Fall back to a racing number or a short form of `userId`; update when `driver.profile_updated` arrives. |
+| Missing nickname | Fall back to a racing number or a short form of `masterId`; update when `driver.profile_updated` arrives. |
 | Service restart mid-session | Rebuild the board by replaying the session's events from the last marker. |
 | RabbitMQ down | Display freezes on last-known standings (clearly the safe degradation); catches up on reconnect. |

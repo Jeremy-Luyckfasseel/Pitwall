@@ -6,11 +6,11 @@
 
 ## Purpose
 Store who a driver is *as a racer* and their complete performance history across all
-sessions, keyed on the canonical `userId`.
+sessions, keyed on the canonical `masterId`.
 
 ## System of record (owns)
 - **Racing profile**: racing number, preferred kart class, leaderboard nickname,
-  racing stats. (Human/contact data is CRM's; both share the `userId`.)
+  racing stats. (Human/contact data is CRM's; both share the `masterId`.)
 - **Full lap-by-lap history** across every session.
 - **Per-session summaries**.
 - **Canonical all-time PR** per driver.
@@ -26,10 +26,10 @@ local PR copy and Frontend updates its read-model.
 `driver.history_appended`.
 **Consumes**: `lap.recorded` (append history), `session.ended` (store summary),
 `personal_record.broken` (confirm PR), `identity.resolved` (create record on new
-`userId`).
+`masterId`).
 
 ## Key flow
-1. New `userId` resolved → Driver upserts a racing profile record.
+1. New `masterId` resolved → Driver upserts a racing profile record.
 2. `lap.recorded` → append to history.
 3. `session.ended` → store the per-session summary, emit `driver.history_appended`.
 4. New best confirmed → `driver.pr_updated`.
@@ -37,7 +37,7 @@ local PR copy and Frontend updates its read-model.
 ## Sad-path table
 | Scenario | Handled outcome |
 |---|---|
-| `lap.recorded` for an unknown `userId` | Create a minimal racing profile on the fly (idempotent upsert); CRM/profile fills in later via events. |
+| `lap.recorded` for an unknown `masterId` | Create a minimal racing profile on the fly (idempotent upsert); CRM/profile fills in later via events. |
 | Conflicting racing-number edit from two sources | Driver owns racing fields → Driver's write wins (source-of-truth precedence); log the conflict. |
 | Duplicate `lap.recorded` (redelivery) | Inbox dedupe by message id → no double-count. |
 | RabbitMQ / peer down | Reads served from local store; writes/history queued via outbox. |

@@ -23,9 +23,9 @@ remaining the **single authority on capacity** and the reschedule cascade.
 > `session.started`/`session.ended`. Booking reconciles its plan to reality.
 
 ## Booking flow & "session full"
-Frontend publishes `booking.requested {requestId, userId, sessionId}`. Booking is the
+Frontend publishes `booking.requested {requestId, masterId, sessionId}`. Booking is the
 **single authority on capacity**: it atomically reserves a spot or rejects.
-- Success → `booking.confirmed {bookingId, userId, sessionId}` (Frontend, Mailing,
+- Success → `booking.confirmed {bookingId, masterId, sessionId}` (Frontend, Mailing,
   Billing react).
 - Full → `booking.rejected {requestId, reason:"full", alternatives:[…]}` offering the
   next available sessions. **Never a dead end.**

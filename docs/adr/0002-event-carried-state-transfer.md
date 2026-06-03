@@ -10,7 +10,7 @@ fails this — a query has nothing to travel over when the bus or peer is unavai
 ## Decision
 Use **event-carried state transfer (ECST)**. Producers publish the full relevant state
 in events; each consumer maintains its **own local copy** (read-model) of just the
-slice it needs, keyed on the canonical `userId`. **No synchronous cross-service calls**
+slice it needs, keyed on the canonical `masterId`. **No synchronous cross-service calls**
 as a primary pattern (no HTTP APIs, no RPC-over-bus). Reads always hit the local copy.
 
 ## Consequences

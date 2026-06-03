@@ -35,7 +35,7 @@ a provider **port** so it stays swappable. Card data never touches Pitwall (host
 redirect → **PCI scope SAQ-A**).
 
 **3. Online card payment exists for exactly one operation: loading stored value.** Top up a
-**wallet** (keyed on the canonical `userId`) or buy a **bearer gift card** (a redeemable code,
+**wallet** (keyed on the canonical `masterId`) or buy a **bearer gift card** (a redeemable code,
 no PII). Both are one **stored-value ledger primitive owned by Billing**. The edge emits
 **`payment.captured`** to `frontend.events`; Billing (ledger system-of-record) credits the
 balance and emits **`wallet.topped_up`** / **`giftcard.issued`** to `billing.events`. The
