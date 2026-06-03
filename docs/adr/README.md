@@ -19,3 +19,5 @@ Format: Context → Decision → Consequences. Status is `Accepted` unless noted
 | [0009](./0009-data-governance.md) | Data governance & privacy as a first-class concern |
 | [0010](./0010-admin-operator-control-plane.md) | Admin surface & operator control plane |
 | [0011](./0011-external-payments-edge.md) | The external payments edge (online stored value) |
+| [0012](./0012-control-room-observability-and-ai-agent.md) | Control Room observability tap & the (deferred) external AI agent |
+| [0013](./0013-admin-ai-assistant.md) | Admin AI Assistant (read-model-backed analytics + bus-intent writes) |
