@@ -977,3 +977,22 @@ merge on red — these are the genuinely dangerous classes). Dependency-CVE and 
 **report to the Security tab but do not block**, so transitive-dep noise can't stall a solo build; they
 are triaged via Dependabot PRs on their own cadence. This mirrors the existing "no merge on red" gate
 for the dangerous cases while keeping the noisy cases informational.
+
+## Round 24 — Test-Driven Development as the working method (2026-06-04)
+
+> Decided during the build phase (Epic 1 in progress). Confirms *how* code is written, not *what* is
+> tested — the four test layers ([03 §3](03-engineering-standards.md)) were already mandated; this pins
+> the **order**. An engineering-standards / Definition-of-Done addition — **no ADR** (no service / bus /
+> `/contract` change).
+
+**Q24.1 — Is TDD the mandated implementation process for the build?**
+A: **Yes — test-first, red → green → refactor, for every story.** Write the failing test(s) **first**,
+derived directly from the story's **Given/When/Then** acceptance criteria; watch them fail; write the
+*minimum* code to pass; then refactor under the green. No production code lands without a failing test
+that motivated it; no merge on red.
+→ The design already suits this: the stories are written in Given/When/Then (ready-made test specs), the
+four test layers (unit · integration on real RabbitMQ+DB · contract · e2e smoke) are CI-gated, and the
+`/contract` valid + known-bad fixtures are themselves test-first artifacts. TDD is the **how** (order);
+the layers are the **what**. Recorded in **[03 §3](03-engineering-standards.md)** + the **Definition of
+Done** (03 §8 and `CLAUDE.md` §5). **Story 1.1** (scaffold/infra) predates this and is exempt; **from
+Story 1.2 onward** it applies. Every `dev-story` session implements test-first by default.

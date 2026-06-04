@@ -59,7 +59,15 @@ Every service must ship:
    (check-in → lap → leaderboard update → session end → invoice → email) runs green in
    CI using the simulators.
 
-CI **gates** on all four. No merge to `dev`/`prod` with a red pipeline.
+**Test-first (TDD) is the working method (Round 24).** Implement every story
+**red → green → refactor**: write the failing test(s) **first** — derived directly from the
+story's **Given/When/Then** acceptance criteria — watch them fail, write the *minimum* code to
+pass, then refactor under the green. The four layers above are the **what**; TDD is the **how**
+(the order tests are written). The `/contract` valid + known-bad fixtures are themselves
+test-first artifacts. No production code lands without a failing test that motivated it. *(Story
+1.1 — scaffold/infra — predates this; from Story 1.2 onward it applies.)*
+
+CI **gates** on all four. No merge to `main` with a red pipeline (GitHub Flow, Round 21).
 
 ## 4. Code style & enforcement
 
@@ -131,6 +139,8 @@ This is an engineering-standards addition (no service/bus/`/contract` change) �
 ## 8. Definition of Done (per change)
 
 - [ ] Conforms to the **service blueprint** ([04](./04-service-blueprint.md)).
+- [ ] **Built test-first** (TDD, Round 24): tests written before the code, red→green→refactor,
+      derived from the story's Given/When/Then ACs.
 - [ ] All four test layers pass in CI; coverage of new logic.
 - [ ] Messages validate against `/contract`; new/changed events have schemas +
       examples committed.
