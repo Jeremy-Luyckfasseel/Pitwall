@@ -1,0 +1,36 @@
+# Pitwall — local (dev/staging) stack. Compose Specification (NO top-level `version:` field).
+# Brings up the shared bus (RabbitMQ). Services are added here as each one is built
+# (walking-skeleton-first — grow, don't pre-scaffold). Prod overrides live in
+# docker-compose.prod.yml; the VPS is prod-only (ADR-0007).
+name: pitwall
+
+services:
+  rabbitmq:
+    image: rabbitmq:4.3-management-alpine   # 4.3.x supported line (AR2); alpine = RAM-friendly (7 GB VPS budget)
+    container_name: pitwall-rabbitmq
+    hostname: pitwall-rabbitmq              # stable node name → the durable volume keeps its data across restarts
+    environment:
+      # Mapped from the shared .env (see .env.example). Defaults match .env.example so a bare
+      # `docker compose config` works in CI; real values come from the gitignored .env.
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-pitwall}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-change-me}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/}
+    ports:
+      # Bound to loopback only — secure by default (the host published port is for local tooling;
+      # inter-service traffic uses the compose network name `rabbitmq:5672`, never the host port).
+      - "127.0.0.1:${RABBITMQ_PORT:-5672}:5672"   # AMQP
+      - "127.0.0.1:15672:15672"                   # Management UI + HTTP API
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq           # durable broker (survives `down` without -v)
+    healthcheck:
+      # Bus-only liveness — never an app HTTP /health (NFR18). Asserts the node is running and
+      # its listeners (AMQP + management) accept connections. No sleeps (AR17).
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  rabbitmq-data:

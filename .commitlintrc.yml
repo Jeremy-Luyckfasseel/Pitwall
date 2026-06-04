@@ -1,0 +1,4 @@
+# Conventional Commits ruleset, enforced in CI by wagoid/commitlint-github-action (.github/workflows/ci.yml).
+# The action bundles commitlint + @commitlint/config-conventional, so no local node_modules are needed.
+extends:
+  - '@commitlint/config-conventional'
