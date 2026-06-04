@@ -45,6 +45,27 @@ a sad-path table; four test layers (unit + integration on real RabbitMQ+DB + con
 - **Conventional Commits**; per-language linter + formatter + pre-commit hooks; **no merge on red**.
 - **Definition of Done:** see [`CLAUDE.md` §5](CLAUDE.md).
 
+### Story tracking (commit ↔ story linkage)
+
+Story status lives in the BMAD sprint tracker (`_bmad-output/`, local). The durable **commit ↔ story**
+link lives in git itself — no external ticketing system:
+
+- **Every commit toward a story carries a `Story:` trailer** (epic.story id from
+  [`epics.md`](docs/analysis/) — e.g. the walking skeleton is Epic 1):
+
+  ```
+  feat(timing): add minimum-lap-time bounce filter
+
+  Story: 1.6
+  ```
+
+- **Branch per story:** `story/<epic>.<story>-<slug>` (e.g. `story/1.6-lap-validity`).
+- **Trace a story's history anytime:** `git log --grep "Story: 1.6"` (all its commits), or
+  `git log --grep "Story: 1\."` for the whole epic. The git history *is* the source of truth — it never
+  drifts from a board.
+- If GitHub Issues are later adopted, add `Refs #<n>` alongside the `Story:` trailer; until then the
+  trailer alone is sufficient.
+
 ## Local checks
 
 ```bash
