@@ -185,7 +185,7 @@ Schemas in `/contract/schemas`. `→` lists primary consumers.
 ### `control.events`
 | Routing key | Meaning | Key payload | → Consumers |
 |---|---|---|---|
-| `heartbeat` | 1 s liveness from every service | `service`, `at`, `instanceId` | Control Room |
+| `control.heartbeat` | 1 s liveness from every service (emitted to each service's **own** `<service>.events` exchange — `source` names the emitter; Control Room binds with a wildcard, same pattern as `privacy.erased`) | `service`, `at`, `instanceId` | Control Room |
 | `control.selfping` | Control Room's own 1 s bus probe | `at`, `nonce` | Control Room (itself) |
 | `alert.raised` | Service/bus down etc. | `target`, `severity`, `detail`, `at` | Mailing, dashboard |
 | `alert.cleared` | Recovery | `target`, `at` | dashboard |

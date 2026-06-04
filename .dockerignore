@@ -1,0 +1,11 @@
+# Build context = repo root for every service (architecture §Build & Dev Mechanics #2).
+# Keep the context lean: exclude VCS, planning output, and per-language build artifacts.
+.git
+.github
+_bmad-output
+docs
+**/node_modules
+**/*.log
+# Go build artifacts (modules are fetched fresh in the build stage)
+**/bin
+*.exe

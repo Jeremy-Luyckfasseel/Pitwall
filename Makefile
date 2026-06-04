@@ -46,8 +46,9 @@ contract-test: ## Run the contract gates (schema-lint + example validation + kno
 contract: ## (placeholder) Wire-DTO codegen — introduced with the 2nd language (Epic 2 / AR15 step 4)
 	@echo "make contract: nothing to generate yet — codegen arrives with the 2nd language (Epic 2 / AR15 step 4)."
 
-test: ## (placeholder) Per-service unit/integration tests — arrive with the first service (Story 1.3+)
-	@echo "make test: nothing to run yet — per-service tests arrive with the first service (Story 1.3+)."
+test: ## Per-service tests. Timing (Go): unit always; integration (real RabbitMQ via testcontainers) needs Docker.
+	cd services/timing && go build ./... && go vet ./... && go test ./...
+	@echo "Integration tests (need Docker): cd services/timing && go test -tags=integration ./test/integration/..."
 
 smoke: ## (placeholder) Cross-language e2e smoke — built in Story 1.11
 	@echo "make smoke: nothing to run yet — the e2e smoke is built in Story 1.11."
