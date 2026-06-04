@@ -116,9 +116,9 @@
 /* ----------------------------- DATA ----------------------------- */
 const SERVICES = {
   timing:    {name:'Timing',       lang:'Go',          db:'SQLite',     sor:'Scans · lap times · PR detection · transponder→masterId map · simulator', note:'Persist-first on scanner outage; emits ACTUAL session start/end; physical reality wins on reconcile.'},
-  identity:  {name:'Identity',     lang:'Go',          db:'SQLite',     sor:'The canonical masterId (UUID v4) · email dedupe', note:'Sole issuer of masterId. Resolve-or-mint on email; no passwords, no profile, no fuzzy merge.'},
-  driver:    {name:'Driver',       lang:'Python',      db:'SQLite',     sor:'Racing profile · full lap history · canonical all-time PR', note:'Minimal-profile idempotent-upsert safety net; Driver-wins precedence on racing fields.'},
-  crm:       {name:'CRM',          lang:'Python',      db:'SQLite',     sor:'Person/company · contacts · consent · loyalty', note:'Creates a person on identity.resolved. CRM-wins on contacts; marketing consent defaults to "no".'},
+  identity:  {name:'Identity',     lang:'Go',          db:'SQLite',     sor:'ONLY the canonical masterId (UUID v4) + email — the thin id-issuer, NOT the user/profile service (Round 22)', note:'Sole issuer of masterId (resolve-or-mint on email); no passwords, no profile, no fuzzy merge. identity.resolved carries only {email, masterId} — the RICH user data lives in CRM + Driver, which broadcast it via their own events.'},
+  driver:    {name:'Driver',       lang:'Python',      db:'SQLite',     sor:'The RACING-identity master: racing number · nickname · kart class · stats · full lap history · canonical PR (Round 22)', note:'Owns + fully CRUDs the racing slice of the user. Minimal-profile idempotent-upsert safety net; Driver-wins precedence on racing fields. Broadcasts driver.profile_updated / driver.pr_updated.'},
+  crm:       {name:'CRM',          lang:'Python',      db:'SQLite',     sor:'THE rich customer/user master: person + company · legal name · contacts · address · consent · loyalty (Round 22)', note:'The "user" service in the everyday sense. Creates a person on identity.resolved; owns + fully CRUDs the customer slice; CRM-wins on contacts; consent defaults "no". Broadcasts crm.person_updated. (User = a composition of owned slices: Identity=id, CRM=customer, Driver=racing — each the single source of truth for its part.)'},
   booking:   {name:'Booking',      lang:'TypeScript',  db:'SQLite',     sor:'Session/heat schedule · capacity', note:'Single capacity authority. Atomic reserve/reject; auto reschedule cascade + overflow flags.'},
   frontend:  {name:'Frontend',     lang:'TypeScript',  db:'SQLite',     sor:'Public + admin UI · credentials/auth · local read-model · payments edge', note:'Owns credentials (only here). Payments edge = sole speaker of Mollie HTTPS (external). Offline-tolerant; pending writes via outbox.'},
   billing:   {name:'Billing',      lang:'Python',      db:'PostgreSQL', sor:'Tabs · charges · invoices/receipts · gapless invoice numbers · stored-value ledger', note:'Gapless numbering under concurrency (counter-row FOR UPDATE). Stored-value ledger SoR (wallets + gift cards), MPV VAT.'},
@@ -363,6 +363,8 @@ function defaultPanel(){
   return `
     <h2>The platform at a glance</h2>
     <div class="sor">10 services + Control Room on RabbitMQ. Bus-only between services; the wire <code>/contract</code> is the only coupling. Each box is a service — <b>click it</b> to see what it publishes, consumes, and how it's built inside.</div>
+    <h3>Where "the user" lives (Round 22)</h3>
+    <div class="hint">There is <b>no single "user" record</b> — a person is a <b>composition of owned slices</b>, each service the single source of truth for its part and fully CRUD-ing only its own: <b>Identity</b> = the id (<code>masterId</code> + email, thin issuer) · <b>CRM</b> = the rich customer (name, contacts, consent, loyalty) · <b>Driver</b> = racing (number, nickname, history, PR). Create routes through Identity for the one canonical id, then fans out; delete = the privacy erasure saga.</div>
     <h3>Edge colours</h3>
     <div class="legend">${leg}</div>
     <h3>Canonical service blueprint</h3>
