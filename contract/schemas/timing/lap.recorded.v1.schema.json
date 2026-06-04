@@ -10,7 +10,8 @@
     "masterId": {
       "type": "string",
       "format": "uuid",
-      "description": "Canonical masterId issued by Identity."
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "Canonical masterId issued by Identity. Lowercase canonical UUID v4 (version nibble 4, variant nibble [89ab]); the pattern is enforced (format is annotation-only)."
     },
     "sessionId": {
       "type": "string",
@@ -29,7 +30,8 @@
     "at": {
       "type": "string",
       "format": "date-time",
-      "description": "When the crossing happened (RFC3339 UTC)."
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      "description": "When the crossing happened. RFC3339 UTC, exactly 3-digit milliseconds, literal 'Z' (AR9). The pattern is enforced (format is annotation-only)."
     },
     "transponderId": {
       "type": ["string", "null"],

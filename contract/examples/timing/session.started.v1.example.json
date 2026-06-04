@@ -1,0 +1,14 @@
+{
+  "id": "018f7b2c-9d31-7a4e-b6c0-1e2f3a4b5c6d",
+  "type": "session.started",
+  "source": "timing",
+  "schemaVersion": 1,
+  "envelopeVersion": 1,
+  "occurredAt": "2026-05-31T13:45:00.000Z",
+  "correlationId": "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
+  "causationId": null,
+  "data": {
+    "sessionId": "session-2026-05-31-evening-heat-3",
+    "startedAt": "2026-05-31T13:45:00.000Z"
+  }
+}

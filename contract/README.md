@@ -61,5 +61,9 @@ disagree, the schema wins; fix the README.**
 1. Load `envelope.schema.json` + the schema for the event it's handling.
 2. Validate on publish and on receive.
 3. Contract tests in CI assert every produced/consumed message matches its schema — both a **valid
-   example** and a **known-bad fixture** per event. (`scripts/validate-contract.py` runs the example
-   pass; the corpus-coherence gate runs alongside it.)
+   example** and a **known-bad fixture** per event. `scripts/validate-contract.py` runs the example
+   pass (valid examples MUST validate); `scripts/check-invalid-fixtures.py` runs the negative pass
+   (every `*.invalid.json` MUST be rejected, and required example↔invalid pairs must exist, so a
+   deleted or no-longer-bad fixture fails the build); the corpus-coherence gate runs alongside them.
+   Known-bad fixtures currently exist for the `timing` events; other namespaces add theirs in their
+   own epics (the negative gate reports them EXEMPT until then).

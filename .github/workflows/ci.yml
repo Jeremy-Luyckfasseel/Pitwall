@@ -29,6 +29,9 @@ jobs:
               - 'contract/**'
               - 'scripts/check-schema-lint.py'
               - 'scripts/validate-contract.py'
+              - 'scripts/check-invalid-fixtures.py'
+              - 'tests/contract/**'
+              - 'pytest.ini'
             services:
               - 'services/**'
               - 'contract/**'   # a contract change rebuilds every consumer (fan-out)
@@ -50,6 +53,41 @@ jobs:
         run: python scripts/check-schema-lint.py
       - name: Schema-lint selftest (proves the gate catches a violation)
         run: python scripts/check-schema-lint.py --selftest
+
+  invalid-fixtures:
+    # The NEGATIVE pass of the contract-test layer: every *.invalid.json known-bad fixture
+    # MUST be rejected, and required example<->invalid pairs must exist (a deleted/orphaned
+    # or no-longer-bad fixture fails the build). Complements the example-pass that runs in
+    # corpus-coherence.yml (validate-contract.py).
+    needs: changes
+    if: ${{ needs.changes.outputs.contract == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install --quiet jsonschema
+      - name: Known-bad fixtures are rejected + pairing enforced
+        run: python scripts/check-invalid-fixtures.py
+      - name: Invalid-fixtures selftest (proves the gate has teeth)
+        run: python scripts/check-invalid-fixtures.py --selftest
+
+  contract-tests:
+    # Exhaustive contract-validation suite: programmatically exercises every possible
+    # envelope/data violation against the timing schemas (plus the committed
+    # examples/fixtures and the gate selftests). Comprehensive sibling of the gate scripts.
+    needs: changes
+    if: ${{ needs.changes.outputs.contract == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install --quiet jsonschema pytest
+      - name: pytest — exhaustive contract validation
+        run: python -m pytest tests/contract
 
   conventional-commits:
     # Conventional Commits gate the squash merge; enforce on PRs (the PR commits / title).
