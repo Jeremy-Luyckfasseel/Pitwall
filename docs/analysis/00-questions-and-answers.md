@@ -930,3 +930,50 @@ field another service owns* — are exactly what would cause unlinkable duplicat
 write-conflicts; their absence is the design working, not a gap.
 → `identity.resolved` deliberately carries only `{requestId, email, masterId}`; **rich user data
 propagates from CRM (`crm.person_updated`) and Driver (`driver.profile_updated`)**, not from Identity.
+
+## Round 23 — Security CI: scanning scope, tooling, phasing & enforcement (2026-06-04)
+
+> Decided during the **build phase** (after Story 1.1 scaffolded CI), closing an **open question**
+> surfaced while reviewing CI coverage: the corpus specified secure-by-**design** practices (secrets via
+> `.env`, none in code/logs/images, CI holds only GHCR+SSH creds, PCI SAQ-A, least-privilege tokens —
+> [03-engineering-standards.md §7](03-engineering-standards.md)) but **no automated security *scanning***.
+> This is an **engineering-standards addition**, not an architecture change: no service, bus, or
+> `/contract` decision is touched, so **no new ADR**. To be reflected in
+> [03-engineering-standards.md](03-engineering-standards.md) §7 + the CI table, and built into
+> `.github/workflows/` as each language lands.
+
+**Q23.1 — Should Pitwall's CI run automated security scanning at all, and over what scope?**
+A: **Yes — all four categories:** (1) **secret scanning**, (2) **dependency / SCA**, (3) **SAST**
+(static analysis), (4) **container image scanning**. Secure-by-design covers *how we write code*;
+these cover *what slips through anyway* (a committed token, a vulnerable transitive dep, an injection
+pattern, a CVE in a base image). For a public portfolio repo the marginal cost is low and the practice
+is itself part of what the project demonstrates.
+
+**Q23.2 — Which tools?**
+A: **GitHub-native first, plus Trivy for images.**
+→ **Secret scanning:** GitHub secret scanning + **push protection** (native); a **gitleaks** CI job is
+the portable blocking gate where native GHAS isn't available (e.g. a private repo). *(Open sub-detail,
+not assumed: repo visibility / GHAS availability — confirm at enablement; gitleaks is the fallback that
+makes the gate work either way.)*
+→ **Dependency / SCA:** **Dependabot** (native alerts + update PRs) backed by a per-language vuln check
+in CI — **govulncheck** (Go), **pip-audit** (Python), **npm audit** (TS).
+→ **SAST:** **CodeQL** (native; Go, Python, JS/TS).
+→ **Container images:** **Trivy** scanning the built service images.
+*(Rejected for now: third-party SAST like Semgrep, and OSS-only pipelines — GitHub-native is free for a
+public repo, lower-maintenance, and reports into the Security tab.)*
+
+**Q23.3 — When does each scan land?**
+A: **Phased with the build (walking-skeleton-first), not all up front.** Secret scanning applies
+**immediately** (the scaffold can already leak a secret); the language-specific scans arrive **with the
+code they scan** — CodeQL/govulncheck/Trivy-on-the-Go-image at **Story 1.3** (first Go service), CodeQL
+Python + pip-audit at **3.1**, CodeQL JS/TS + npm audit at the **TS tier (4.x/5.x)**. Dependabot is
+enabled once a language manifest exists. Standing up no-op jobs before there's anything to scan is
+avoided. Each is **path-filtered** like the rest of CI (AR17).
+
+**Q23.4 — How strict are the gates?**
+A: **Blocking on secrets and on high/critical SAST findings; advisory (report-only) for dependency and
+image findings.** A detected secret or a high/critical CodeQL finding **fails CI / blocks merge** (no
+merge on red — these are the genuinely dangerous classes). Dependency-CVE and image-CVE results
+**report to the Security tab but do not block**, so transitive-dep noise can't stall a solo build; they
+are triaged via Dependabot PRs on their own cadence. This mirrors the existing "no merge on red" gate
+for the dangerous cases while keeping the noisy cases informational.
