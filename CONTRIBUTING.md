@@ -40,8 +40,11 @@ a sad-path table; four test layers (unit + integration on real RabbitMQ+DB + con
 
 ## Workflow
 
-- **Branches = environments** (`dev` local; `prod`/`main` release line, VPS = prod only). **Per-service
-  tags** `‹svc›-vX.Y.Z` build → GHCR → VPS pulls only the changed container.
+- **GitHub Flow** (Round 21): short-lived `story/<epic>.<story>-slug` → PR → **squash** → `main`;
+  **no long-lived `dev` branch** (solo build). `main` is the always-green integration + release line.
+  Local Compose = dev/staging, VPS = prod only. **Per-service tags** `‹svc›-vX.Y.Z` build → GHCR → VPS
+  pulls only the changed container — **deploy ≠ merge** (merging to `main` never touches prod; only a
+  tag does).
 - **Conventional Commits**; per-language linter + formatter + pre-commit hooks; **no merge on red**.
 - **Definition of Done:** see [`CLAUDE.md` §5](CLAUDE.md).
 

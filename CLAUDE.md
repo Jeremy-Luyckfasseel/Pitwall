@@ -94,9 +94,10 @@ Full version: [`docs/analysis/03-engineering-standards.md`](docs/analysis/03-eng
   ([ADR-0005](docs/adr/0005-outbox-inbox-event-store.md)).
 - **Observability:** structured JSON logs + a `correlationId` propagated across the bus.
 - **Repo:** monorepo; `services/<name>/` each self-contained with its own Dockerfile.
-- **Deploy:** branches = envs (dev local, **VPS = prod only**); **per-service tags**
-  `‹svc›-vX.Y.Z` build → GHCR → VPS pulls only the changed container
-  ([ADR-0007](docs/adr/0007-monorepo-per-service-deploy.md)).
+- **Deploy:** **GitHub Flow** — `story/<epic>.<story>-slug` → PR (squash) → `main` (always green;
+  **no long-lived `dev` branch**, Round 21). Local Compose = dev/staging, **VPS = prod only**;
+  **per-service tags** `‹svc›-vX.Y.Z` build → GHCR → VPS pulls only the changed container
+  (deploy ≠ merge) ([ADR-0007](docs/adr/0007-monorepo-per-service-deploy.md)).
 - **Config:** `.env` locally and on the VPS; `.env.example` committed; real `.env`
   gitignored.
 

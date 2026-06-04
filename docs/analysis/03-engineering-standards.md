@@ -88,8 +88,8 @@ CI **gates** on all four. No merge to `dev`/`prod` with a red pipeline.
 
 | Stage | Behaviour |
 |---|---|
-| **On PR / push to `dev`** | lint + type-check + unit + integration + contract + smoke; build images. `dev` = integration env (run locally). |
-| **On push to `prod`/`main`** | same gates; this is the release line. |
+| **On PR to `main`** (from a `story/*` branch) | lint + type-check + unit + integration + contract + smoke; build images. **No merge on red.** GitHub Flow — no long-lived `dev` branch (Round 21); integration runs locally via Compose. |
+| **On push to `main`** (squash-merge) | same gates; `main` is the always-green release line. Merging does **not** deploy. |
 | **On per-service tag** `‹svc›-vX.Y.Z` | CI builds that service's image, pushes to **GHCR**, then the **VPS pulls** and `docker compose up -d` recreates **only that container**. Independent per-team releases in one repo. |
 | **Secrets** | `.env` on the VPS (and locally); CI holds only GHCR + SSH deploy creds. |
 | **Rollback** | redeploy the previous tag's image (immutable images in GHCR). |
