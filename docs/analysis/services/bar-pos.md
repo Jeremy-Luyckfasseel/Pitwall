@@ -1,12 +1,14 @@
 # Service: Bar / POS
 
-> A thin point-of-sale producer for bar orders. Added because the brief mentions a bar
-> but lists no bar service. Decisions: [Q&A](../00-questions-and-answers.md) Round 12.
+> The **front-of-house POS / counter** — bar orders **plus** on-site walk-in registration, track-time
+> booking, and (pre)payment. Decisions: [Q&A](../00-questions-and-answers.md) Round 12 (bar) +
+> **Round 22 / [ADR-0014](../../adr/0014-front-of-house-pos-counter.md)** (counter scope).
 > Conforms to the [service blueprint](../04-service-blueprint.md).
 
 ## Purpose
-Let bar staff record orders against a driver, which Billing adds to that driver's tab.
-The bar is simply another **event producer** on the bus.
+The staffed counter where a walk-in is **registered**, **books & pays for track time**, and buys at the
+**bar** — all as **event producers/consumers** on the bus (never an inter-service API). It issues
+intents; Identity remains the sole id-issuer and Booking the sole capacity authority.
 
 ## System of record (owns)
 - Bar **orders** (items, totals, who, when) — its own record of what was sold.
@@ -14,8 +16,26 @@ The bar is simply another **event producer** on the bus.
 - A **local read-model copy** (ECST) of **wallet / gift-card balances** (from Billing's
   `wallet.*` / `giftcard.*` events) so the POS can accept stored-value payment and validate
   gift-card codes without a synchronous call (Round 17, [ADR-0011](../../adr/0011-external-payments-edge.md)).
+- A **local availability read-model** (ECST) of the **schedule** (from Booking's `session.scheduled` /
+  `session.rescheduled` / `session.cancelled`) so the counter shows current session availability and
+  keeps working (stale-flagged) when Booking or the bus are down (Round 22).
 
 ## Behaviour
+### Counter — register, book, pay for track time (Round 22, ADR-0014)
+- **Register a walk-in:** the counter captures an email (+ optional name) → publishes
+  `identity.lookup_requested {requestId, email}`; on `identity.resolved` it binds the `masterId` to the
+  **QR/transponder issued at the counter**. Register-first (FR39) holds; the POS **never mints a
+  `masterId`**.
+- **Book track time:** the counter shows live availability from its schedule read-model and books the
+  driver into a chosen session → publishes `booking.requested {requestId, masterId, sessionId}`; Booking
+  decides (capacity authority) and the counter reflects `booking.confirmed` / `booking.rejected`
+  (+ alternatives — no dead end).
+- **Pay for the session (incl. prepay):** the booked session can be **paid up front** at the counter by
+  card/cash terminal or **wallet balance**, modelled with the **existing** Billing primitives (an
+  immediately-settled tab charge / `wallet.debited`) — **no new money event** — *in addition to* the
+  existing postpaid tab-at-session-end path. Insufficient wallet → partial split / card-cash fallback.
+
+### Bar sales
 - **Identified sale:** staff (or a kiosk) select a present driver (by QR/`masterId`) and items
   → publish `bar.order_placed {orderId, masterId, items[], total, at}` (Billing adds to the
   tab).

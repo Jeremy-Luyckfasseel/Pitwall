@@ -166,9 +166,21 @@ Schemas in `/contract/schemas`. `→` lists primary consumers.
 | `email.suppressed` | Marketing mail skipped (no consent) | `masterId`, `template`, `reason` | Control Room |
 
 ### `bar.events`
+
+> **Bar/POS is the front-of-house POS / counter (Round 22, [ADR-0014](../adr/0014-front-of-house-pos-counter.md)).**
+> Beyond bar sales it **registers walk-ins** and **sells/books track time** at the counter, so it also
+> **publishes** the existing `identity.lookup_requested` and `booking.requested` intents to `bar.events`
+> (Identity & Booking already bind those routing keys) and **consumes** `identity.resolved` (issue
+> QR/transponder) plus `session.scheduled`/`session.rescheduled`/`session.cancelled` (a local
+> **availability read-model**) and `booking.confirmed`/`booking.rejected`. **Session prepayment reuses
+> existing Billing primitives** (an immediately-settled tab charge / `wallet.debited`) — **no new event
+> type**. Capacity authority stays with Booking; the sole id-issuer stays Identity; register-first holds.
+
 | Routing key | Meaning | Key payload | → Consumers |
 |---|---|---|---|
 | `bar.order_placed` | Bar order to charge (`masterId` **optional** — absent = anonymous sale, Round 15) | `orderId`, `masterId?`, `items[]`, `total`, `at` | Billing |
+| `identity.lookup_requested` | **Counter registration** of a walk-in (same schema as in `identity.events`) | `requestId`, `email` | Identity |
+| `booking.requested` | **Counter** books a walk-in into a session (same schema as in `frontend.events`) | `requestId`, `masterId`, `sessionId` | Booking |
 
 ### `control.events`
 | Routing key | Meaning | Key payload | → Consumers |

@@ -73,6 +73,15 @@ the same person.
 - The `masterId` is **embedded directly in the QR code**, so Timing reads it at the gate
   with no lookup.
 
+> **Identity is *not* the "user service" — it is only the id issuer (Round 22).** The **rich
+> customer/user master is CRM** (legal name, contacts, address, company link, consent, loyalty); the
+> **racing-identity master is Driver** (number, nickname, kart class, stats, history, PR). The "user" is
+> a **composition of owned slices** — each service is the single source of truth for *its* slice and
+> fully CRUDs it; everyone else holds read-only event-fed copies. User *creation* can be initiated from
+> any admin surface (CRM, the POS counter, the website) but always routes through Identity for the one
+> canonical id; *deletion* is the erasure saga. `identity.resolved` carries only `email` + `masterId`;
+> rich data propagates from `crm.person_updated` / `driver.profile_updated`.
+
 See [ADR-0003](../adr/0003-identity-as-uuid-issuer.md).
 
 ## 6. Service roster (10 services + Control Room)
@@ -103,7 +112,7 @@ See [ADR-0003](../adr/0003-identity-as-uuid-issuer.md).
 | 7 | **Billing** | tabs, charges, invoices/receipts, invoice numbers | [billing](./services/billing.md) |
 | 8 | **Mailing** | outbound email (reacts only) | [mailing](./services/mailing.md) |
 | 9 | **Leaderboard** | live standings (read model) | [leaderboard](./services/leaderboard.md) |
-| 10 | **Bar/POS** | bar orders | [bar-pos](./services/bar-pos.md) |
+| 10 | **Bar/POS** | bar orders **+ front-of-house counter** (walk-in registration · on-site track-time booking + (pre)payment · [ADR-0014](../adr/0014-front-of-house-pos-counter.md)) | [bar-pos](./services/bar-pos.md) |
 | — | **Control Room** | monitoring/alert read-model | [control-room](./services/control-room.md) |
 
 ## 7. Health & monitoring (bus-only)
