@@ -127,6 +127,7 @@ on the VPS (resource limits) — see Q2.6.
 → `dev` branch = integration; `prod`/`main` = release line. CI tests + builds images
 on branch pushes. A per-service `v*` tag is what promotes to **production on the
 VPS**. "Deployed" (env) vs "released" (tagged) are separated.
+> **⚠ Branch model superseded by [Round 21](#round-21--branching-model-github-flow-no-long-lived-dev-branch-2026-06-04):** the `dev`-*branch*-as-integration clause no longer holds — the build is solo, so it's **GitHub Flow** (`story/* → PR → main`, no long-lived `dev` branch). The *environment* split (local = dev/staging, VPS = prod) and the deploy-by-tag semantics here are **unchanged**.
 
 **Q2.5 — Image build & delivery?**
 A: **Build in CI → push to GitHub Container Registry (GHCR) → VPS pulls.**
@@ -861,3 +862,22 @@ outside the MVP FR set. The Control Room's one-line **AI hint footprint** (UX-DR
 the MVP (Epic 12); only the assistant tool itself ships later.
 → **ADR-0013 §4 updated** ("Read analytics = MVP" → "post-MVP shelf"); epics.md post-MVP shelf cites
 this round.
+
+## Round 21 — Branching model: GitHub Flow, no long-lived `dev` branch (2026-06-04)
+
+> Decided while setting up the build phase. **Simplifies the branch half of [Q2.4](#round-2--deploy-cicd--persistence) /
+> [ADR-0007](../adr/0007-monorepo-per-service-deploy.md)** for a solo developer. The *environment* and
+> *release* decisions (Q2.3, Q2.5, Q2.6 — local Compose = dev/staging, VPS = prod, per-service tags
+> promote to prod) are **unchanged**.
+
+**Q21.1 — Do we keep a long-lived `dev` integration branch (story → dev → main), or go story → main?**
+A: **Story → main (GitHub Flow). No long-lived `dev` branch.** Short-lived
+`story/<epic>.<story>-slug` branches → PR → **squash** → `main`. `main` is the always-green
+integration + release line.
+→ Rationale: the build is **solo**, so there are no concurrent integrations to buffer — story branches
+already isolate WIP and CI gates each PR. Crucially, **deploys are tag-driven, not branch-driven**
+(Q2.3 / ADR-0007): merging to `main` never touches prod; only a per-service tag `‹svc›-vX.Y.Z` promotes
+to the VPS. So a `dev` buffer protects nothing — `main` can be the single integration target and stay
+releasable. This **supersedes the "`dev` branch = integration" clause of Q2.4**; the "`dev` = *local
+environment*" mapping (Q2.6) stands — that was always about where code runs, not a git branch. Each
+story commit carries a `Story: <epic>.<story>` trailer (see `CONTRIBUTING.md`).

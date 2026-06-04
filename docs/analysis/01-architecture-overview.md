@@ -131,7 +131,7 @@ Docker's own `healthcheck:` uses a **bus-connectivity script / liveness touch-fi
 | **Orchestration** | Docker Compose now; Kubernetes documented as a later stretch goal. |
 | **Dev/staging** | Runs on the **local machine** (full stack via Compose). |
 | **Production** | A single **VPS (7 GB RAM / 75 GB disk, shared with another app)** — production only. |
-| **Branches** | `dev` = integration, `prod`/`main` = release line. Branches map to environments; a per-service tag promotes to prod. |
+| **Branches** | **GitHub Flow** (Round 21): `story/<epic>.<story>` → PR (squash) → `main`; **no long-lived `dev` branch** (solo). `main` = always-green integration + release line; a per-service tag promotes to prod (deploy ≠ merge). |
 | **Releases** | **Per-service tags** (e.g. `timing-v1.2.0`) trigger CI to rebuild/redeploy **only that service** — independent versioning in a monorepo. |
 | **Image delivery** | CI builds → pushes to **GHCR** → the VPS **pulls** and recreates only changed containers. |
 | **Persistence** | **Database-per-service**, each service's own engine choice; footprint right-sized at deploy time. |
