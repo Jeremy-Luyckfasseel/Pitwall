@@ -1,0 +1,15 @@
+{
+  "_invalidReason": "Envelope `id` is an UPPERCASE UUID (018F7B2C-...). UUIDs MUST be lowercase canonical; rejected by the envelope `id` lowercase `pattern`. (format:uuid alone would NOT catch this — the pattern does.)",
+  "id": "018F7B2C-9D31-7A4E-B6C0-1E2F3A4B5C6D",
+  "type": "session.started",
+  "source": "timing",
+  "schemaVersion": 1,
+  "envelopeVersion": 1,
+  "occurredAt": "2026-05-31T13:45:00.000Z",
+  "correlationId": "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
+  "causationId": null,
+  "data": {
+    "sessionId": "session-2026-05-31-evening-heat-3",
+    "startedAt": "2026-05-31T13:45:00.000Z"
+  }
+}

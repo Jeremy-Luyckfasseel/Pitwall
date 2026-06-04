@@ -36,10 +36,12 @@ clean: ## Stop the stack AND delete its data volumes (destructive)
 logs: ## Tail the stack logs
 	docker compose logs -f
 
-contract-test: ## Run the contract gates (schema-lint + example validation + corpus coherence)
+contract-test: ## Run the contract gates (schema-lint + example validation + known-bad rejection + corpus coherence + pytest)
 	python3 scripts/check-schema-lint.py
 	python3 scripts/validate-contract.py
+	python3 scripts/check-invalid-fixtures.py
 	bash scripts/check-corpus-coherence.sh
+	python3 -m pytest tests/contract
 
 contract: ## (placeholder) Wire-DTO codegen — introduced with the 2nd language (Epic 2 / AR15 step 4)
 	@echo "make contract: nothing to generate yet — codegen arrives with the 2nd language (Epic 2 / AR15 step 4)."
