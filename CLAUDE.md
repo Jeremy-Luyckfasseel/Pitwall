@@ -103,11 +103,12 @@ Full version: [`docs/analysis/03-engineering-standards.md`](docs/analysis/03-eng
 
 ## 5. Definition of Done
 
-A change is done only when it: conforms to the blueprint; passes all four test layers;
-validates against `/contract` (with schemas+examples committed for new events); is
-linted with a Conventional Commit; handles its sad paths; logs with a correlation id
-and leaks no secrets; updates the relevant docs; and — if it changes architecture —
-adds an ADR.
+A change is done only when it: conforms to the blueprint; is **built test-first**
+(TDD — tests written before the code, red→green→refactor from the story's Given/When/Then
+ACs, Round 24); passes all four test layers; validates against `/contract` (with
+schemas+examples committed for new events); is linted with a Conventional Commit; handles
+its sad paths; logs with a correlation id and leaks no secrets; updates the relevant docs;
+and — if it changes architecture — adds an ADR.
 
 ## 6. Where everything lives
 
