@@ -1,0 +1,24 @@
+# Normalize line endings. The CI runners and the VPS are Linux; shell scripts, Makefiles, and
+# compose/YAML break with CRLF. Force LF for everything text, regardless of a contributor's
+# core.autocrlf setting.
+* text=auto eol=lf
+
+# Line-ending-sensitive files — always LF, never CRLF.
+*.sh        text eol=lf
+Makefile    text eol=lf
+*.mk        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.py        text eol=lf
+*.go        text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.json      text eol=lf
+
+# Binary assets — never touched.
+*.pdf       binary
+*.png       binary
+*.jpg       binary
+*.ico       binary
+*.woff      binary
+*.woff2     binary

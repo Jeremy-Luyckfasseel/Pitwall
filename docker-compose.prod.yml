@@ -1,0 +1,15 @@
+# Pitwall — production override (VPS only — ADR-0007). Compose Specification (NO `version:` field).
+# Apply layered over the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Keep this minimal: it adjusts only what must differ in prod. Per-service prod settings are added
+# here as each service ships.
+name: pitwall
+
+services:
+  rabbitmq:
+    # Refuse to boot on placeholder credentials — prod MUST supply real values in the VPS .env.
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?set a real RABBITMQ_USER in the VPS .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set a real RABBITMQ_PASSWORD in the VPS .env}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/}
+    restart: always

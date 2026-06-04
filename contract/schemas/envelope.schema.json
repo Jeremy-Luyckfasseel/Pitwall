@@ -5,7 +5,7 @@
   "description": "Every message on the bus uses this envelope. The event-specific payload lives under `data` and is validated against its own schema based on `type` + `schemaVersion`. All JSON field names are camelCase; all UUIDs are lowercase canonical (readers normalize-then-validate); all timestamps are RFC3339 UTC with exactly 3-digit milliseconds and a literal `Z`. See contract/README.md (Wire Contract Rules).",
   "type": "object",
   "additionalProperties": true,
-  "required": ["id", "type", "source", "schemaVersion", "envelopeVersion", "occurredAt", "correlationId", "data"],
+  "required": ["id", "type", "source", "schemaVersion", "envelopeVersion", "occurredAt", "correlationId", "causationId", "data"],
   "properties": {
     "id": {
       "type": "string",
