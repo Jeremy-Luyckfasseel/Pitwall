@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pitwall — Interactive System Map</title>
+<!--
+  Pitwall interactive system map. Self-contained, no dependencies.
+  Source of truth: docs/analysis/02-message-bus-and-contracts.md (event catalog),
+  docs/analysis/01-architecture-overview.md (roster/SoR), architecture.md (language tiers),
+  /contract (schemas). Logical event flows — physically routed via RabbitMQ (ADR-0001).
+  Regenerate by hand if the corpus changes; not auto-synced.
+-->
+<style>
+  :root{
+    --bg:#0D0E10; --surface:#17181B; --surface2:#1f2024; --text:#F4EDE2; --muted:#8A8A8F;
+    --border:#26282D; --accent:#FF8400; --accent2:#FF9626; --ink:#140A00;
+    --ok:#4ED694; --warn:#FFCE4D; --danger:#FF5360; --focus:#F4EDE2;
+    --c-race:#FF8400; --c-life:#5EC8FF; --c-id:#4ED6C0; --c-intent:#B98CFF;
+    --c-money:#4ED694; --c-crm:#FF8FC7; --c-book:#FFCE4D; --c-mail:#8A8A8F;
+    --c-health:#5a5d66; --c-privacy:#FF5360;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.5}
+  a{color:var(--accent)}
+  .app{display:flex;flex-direction:column;height:100vh}
+  header{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+  header h1{font-size:20px;margin:0;font-weight:700;letter-spacing:-.02em}
+  header h1 .dot{color:var(--accent)}
+  header .cap{color:var(--muted);font-size:12px}
+  .controls{margin-left:auto;display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:12px}
+  .controls label{display:flex;gap:6px;align-items:center;color:var(--muted);cursor:pointer;user-select:none}
+  .controls select{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font:inherit;font-size:12px}
+  .controls button{background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font:inherit;font-size:11px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
+  .controls button:hover{color:var(--text);border-color:var(--muted)}
+  main{flex:1;display:flex;min-height:0}
+  .graphwrap{flex:1;min-width:0;position:relative}
+  svg{width:100%;height:100%;display:block}
+  .node rect{fill:var(--surface);stroke:var(--border);stroke-width:1.5;rx:10;cursor:pointer;transition:stroke .15s,fill .15s}
+  .node:hover rect{stroke:var(--muted)}
+  .node.sel rect{stroke:var(--accent);stroke-width:2.5;fill:#211b12}
+  .node text{fill:var(--text);font-size:13px;font-weight:600;pointer-events:none}
+  .node tspan.lang{fill:var(--muted);font-size:10px;font-weight:600;letter-spacing:.06em}
+  .node.dim{opacity:.28}
+  .edge{fill:none;stroke-width:1.4;opacity:.18;transition:opacity .15s,stroke-width .15s}
+  .edge.show{opacity:.5}
+  .edge.hot{opacity:.95;stroke-width:2.4}
+  .edge.dimmed{opacity:.05}
+  .elabel{fill:var(--text);font-size:10px;font-family:'IBM Plex Mono',ui-monospace,monospace;opacity:0;pointer-events:none}
+  .elabel.show{opacity:.9}
+  .elabel-bg{fill:var(--bg);opacity:0}
+  .elabel-bg.show{opacity:.72}
+  /* side panel */
+  aside{width:380px;flex:none;border-left:1px solid var(--border);background:var(--surface);overflow-y:auto;padding:18px 18px 60px}
+  aside h2{font-size:16px;margin:.2em 0 .1em;letter-spacing:-.01em}
+  aside h2 .lang{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.06em;margin-left:8px;vertical-align:middle}
+  aside .sor{color:var(--muted);font-size:12.5px;margin:.2em 0 1em}
+  aside h3{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:18px 0 8px;border-top:1px solid var(--border);padding-top:14px}
+  .evlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
+  .evlist li{display:flex;gap:8px;align-items:flex-start;font-size:12.5px}
+  .evlist code{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11.5px;color:var(--text)}
+  .evlist .to{color:var(--muted);font-size:11px}
+  .swatch{width:9px;height:9px;border-radius:2px;flex:none;margin-top:4px}
+  .pill{display:inline-block;font-size:10px;padding:1px 6px;border-radius:999px;border:1px solid var(--border);color:var(--muted);margin-left:6px}
+  .hint{color:var(--muted);font-size:12.5px}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin:6px 0 0}
+  .legend span{display:flex;gap:6px;align-items:center;font-size:11px;color:var(--muted)}
+  .legend i{width:14px;height:3px;border-radius:2px;display:inline-block}
+  /* blueprint */
+  .bp{border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--bg);margin-top:8px}
+  .bp .bus{background:#211b12;border:1px solid var(--accent);color:var(--accent);text-align:center;border-radius:8px;padding:7px;font-size:12px;font-weight:600;letter-spacing:.04em}
+  .bp .row{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:11px;justify-content:center;margin:6px 0}
+  .bp .box{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin:7px 0}
+  .bp .box b{color:var(--text);font-size:12.5px;font-weight:600}
+  .bp .box p{margin:3px 0 0;color:var(--muted);font-size:11.5px}
+  .bp .box.in{border-left:3px solid var(--c-life)}
+  .bp .box.out{border-left:3px solid var(--accent)}
+  .bp .box.core{border-left:3px solid var(--text)}
+  .bp .box.db{border-left:3px solid var(--c-money)}
+  .bp .side{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
+  .bp .chip{font-size:10.5px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:2px 8px}
+  .tip{position:absolute;pointer-events:none;background:var(--surface2);border:1px solid var(--border);color:var(--text);
+    font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:11px;padding:4px 8px;border-radius:6px;opacity:0;transition:opacity .1s;white-space:nowrap;z-index:5}
+  footer{padding:8px 20px;border-top:1px solid var(--border);color:var(--muted);font-size:11px}
+  code.k{font-family:'IBM Plex Mono',ui-monospace,monospace;color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Pitwall<span class="dot">.</span> System Map</h1>
+    <span class="cap">Logical event flows — physically routed via RabbitMQ (ADR-0001). Click a service.</span>
+    <div class="controls">
+      <select id="picker"><option value="">— jump to service —</option></select>
+      <label><input type="checkbox" id="tHealth"> heartbeats</label>
+      <label><input type="checkbox" id="tPriv"> privacy fan-out</label>
+      <label><input type="checkbox" id="tAll" checked> show all edges</label>
+      <button id="reset">reset</button>
+    </div>
+  </header>
+  <main>
+    <div class="graphwrap" id="graphwrap">
+      <svg id="svg" viewBox="0 0 1000 760" preserveAspectRatio="xMidYMid meet" aria-label="Pitwall service graph"></svg>
+      <div class="tip" id="tip"></div>
+    </div>
+    <aside id="panel"></aside>
+  </main>
+  <footer>
+    11 nodes (10 services + Control Room) · 3-language polyglot (Go / Python / TypeScript) · one durable topic exchange per service ·
+    source: <code class="k">docs/analysis/02-message-bus-and-contracts.md</code>
+  </footer>
+</div>
+
+<script>
+/* ----------------------------- DATA ----------------------------- */
+const SERVICES = {
+  timing:    {name:'Timing',       lang:'Go',          db:'SQLite',     sor:'Scans · lap times · PR detection · transponder→masterId map · simulator', note:'Persist-first on scanner outage; emits ACTUAL session start/end; physical reality wins on reconcile.'},
+  identity:  {name:'Identity',     lang:'Go',          db:'SQLite',     sor:'The canonical masterId (UUID v4) · email dedupe', note:'Sole issuer of masterId. Resolve-or-mint on email; no passwords, no profile, no fuzzy merge.'},
+  driver:    {name:'Driver',       lang:'Python',      db:'SQLite',     sor:'Racing profile · full lap history · canonical all-time PR', note:'Minimal-profile idempotent-upsert safety net; Driver-wins precedence on racing fields.'},
+  crm:       {name:'CRM',          lang:'Python',      db:'SQLite',     sor:'Person/company · contacts · consent · loyalty', note:'Creates a person on identity.resolved. CRM-wins on contacts; marketing consent defaults to "no".'},
+  booking:   {name:'Booking',      lang:'TypeScript',  db:'SQLite',     sor:'Session/heat schedule · capacity', note:'Single capacity authority. Atomic reserve/reject; auto reschedule cascade + overflow flags.'},
+  frontend:  {name:'Frontend',     lang:'TypeScript',  db:'SQLite',     sor:'Public + admin UI · credentials/auth · local read-model · payments edge', note:'Owns credentials (only here). Payments edge = sole speaker of Mollie HTTPS (external). Offline-tolerant; pending writes via outbox.'},
+  billing:   {name:'Billing',      lang:'Python',      db:'PostgreSQL', sor:'Tabs · charges · invoices/receipts · gapless invoice numbers · stored-value ledger', note:'Gapless numbering under concurrency (counter-row FOR UPDATE). Stored-value ledger SoR (wallets + gift cards), MPV VAT.'},
+  mailing:   {name:'Mailing',      lang:'Python',      db:'SQLite',     sor:'Outbound email (reacts only)', note:'Never self-initiates. Consent-aware; idempotent by (recipient, template, sourceEventId); SMTP/Mailhog.'},
+  leaderboard:{name:'Leaderboard', lang:'Go',          db:'SQLite',     sor:'Live standings (pure read-model)', note:'Best-lap order, auto-reset on session.started, tie-break by first-set; freezes on bus-down (flagged stale).'},
+  bar:       {name:'Bar/POS',      lang:'TypeScript',  db:'SQLite',     sor:'Front-of-house counter: bar orders · product/price list · wallet-balance copy · schedule availability copy', note:'Bar sales (identified + anonymous) PLUS the counter (Round 22, ADR-0014): registers walk-ins (→ Identity), books track time (→ Booking, availability read-model), takes session (pre)payment via existing tab/wallet primitives. Never mints an id; Booking keeps capacity authority.'},
+  control:   {name:'Control Room', lang:'Go',          db:'SQLite',     sor:'Monitoring/alert read-model · stats · observation tap · privacy-saga coordinator', note:'Heartbeat tracking (3-miss DOWN) + self-ping bus/service disambiguation. The one sanctioned bus-down call → Mailing.'},
+};
+
+// Circular order chosen to keep related services adjacent.
+const ORDER = ['frontend','identity','timing','leaderboard','driver','crm','booking','billing','bar','mailing','control'];
+
+// kind → colour + label
+const KIND = {
+  race:   {c:'var(--c-race)',   label:'racing'},
+  life:   {c:'var(--c-life)',   label:'session/check-in'},
+  id:     {c:'var(--c-id)',     label:'identity'},
+  intent: {c:'var(--c-intent)', label:'intent (*.requested)'},
+  money:  {c:'var(--c-money)',  label:'money / stored value'},
+  crm:    {c:'var(--c-crm)',    label:'crm / profile'},
+  book:   {c:'var(--c-book)',   label:'booking/schedule'},
+  mail:   {c:'var(--c-mail)',   label:'mail / audit'},
+  health: {c:'var(--c-health)', label:'heartbeat (1s)'},
+  privacy:{c:'var(--c-privacy)',label:'privacy / governance'},
+};
+
+// Domain edges (always available). from = publishing service; to = consumers.
+const EVENTS = [
+  // timing
+  {ev:'driver.checked_in',      from:'timing',   to:['billing','booking','control'], kind:'life'},
+  {ev:'lap.recorded',           from:'timing',   to:['driver','leaderboard','control'], kind:'race'},
+  {ev:'session.started',        from:'timing',   to:['booking','leaderboard','billing'], kind:'life'},
+  {ev:'session.ended',          from:'timing',   to:['booking','billing','driver','mailing','leaderboard'], kind:'life'},
+  {ev:'personal_record.broken', from:'timing',   to:['driver','mailing'], kind:'race'},
+  {ev:'scanner.offline',        from:'timing',   to:['control'], kind:'life'},
+  {ev:'scanner.online',         from:'timing',   to:['control'], kind:'life'},
+  // identity
+  {ev:'identity.resolved',      from:'identity', to:['frontend','timing','crm','driver','bar'], kind:'id'},
+  // frontend (intents + edge)
+  {ev:'user.registration_submitted', from:'frontend', to:['identity'], kind:'intent'},
+  {ev:'identity.lookup_requested',   from:'frontend', to:['identity'], kind:'intent'},
+  {ev:'booking.requested',      from:'frontend', to:['booking'], kind:'intent'},
+  {ev:'profile.edit_requested', from:'frontend', to:['driver','crm'], kind:'intent'},
+  {ev:'schedule.change_requested', from:'frontend', to:['booking'], kind:'intent'},
+  {ev:'session.control_requested', from:'frontend', to:['timing'], kind:'intent'},
+  {ev:'payment.captured',       from:'frontend', to:['billing'], kind:'money'},
+  // driver
+  {ev:'driver.profile_updated', from:'driver',   to:['frontend','leaderboard','timing'], kind:'crm'},
+  {ev:'driver.pr_updated',      from:'driver',   to:['timing','frontend'], kind:'race'},
+  {ev:'driver.history_appended',from:'driver',   to:['frontend'], kind:'crm'},
+  // crm
+  {ev:'crm.person_updated',     from:'crm',      to:['billing','mailing','frontend'], kind:'crm'},
+  {ev:'crm.company_updated',    from:'crm',      to:['billing'], kind:'crm'},
+  {ev:'crm.employee_linked',    from:'crm',      to:['billing'], kind:'crm'},
+  {ev:'crm.consent_changed',    from:'crm',      to:['mailing'], kind:'crm'},
+  // booking
+  {ev:'booking.confirmed',      from:'booking',  to:['frontend','mailing','billing','bar'], kind:'book'},
+  {ev:'booking.rejected',       from:'booking',  to:['frontend','mailing','bar'], kind:'book'},
+  {ev:'session.scheduled',      from:'booking',  to:['frontend','leaderboard','bar'], kind:'book'},
+  {ev:'session.rescheduled',    from:'booking',  to:['frontend','mailing','leaderboard','bar'], kind:'book'},
+  {ev:'session.cancelled',      from:'booking',  to:['frontend','mailing','bar'], kind:'book'},
+  // billing
+  {ev:'tab.opened',             from:'billing',  to:['control'], kind:'money'},
+  {ev:'invoice.issued',         from:'billing',  to:['mailing','crm'], kind:'money'},
+  {ev:'wallet.topped_up',       from:'billing',  to:['frontend','bar','control'], kind:'money'},
+  {ev:'wallet.debited',         from:'billing',  to:['frontend','bar','control'], kind:'money'},
+  {ev:'giftcard.issued',        from:'billing',  to:['bar','frontend','mailing'], kind:'money'},
+  {ev:'giftcard.redeemed',      from:'billing',  to:['frontend','bar','control'], kind:'money'},
+  // mailing
+  {ev:'email.sent',             from:'mailing',  to:['control'], kind:'mail'},
+  {ev:'email.suppressed',       from:'mailing',  to:['control'], kind:'mail'},
+  // bar / front-of-house counter (Round 22, ADR-0014)
+  {ev:'bar.order_placed',       from:'bar',      to:['billing'], kind:'money'},
+  {ev:'identity.lookup_requested', from:'bar',   to:['identity'], kind:'intent'},
+  {ev:'booking.requested',      from:'bar',      to:['booking'], kind:'intent'},
+  // control
+  {ev:'alert.raised',           from:'control',  to:['mailing'], kind:'mail'},
+  {ev:'privacy.export_ready',   from:'control',  to:['mailing'], kind:'privacy'},
+];
+
+const ALL = Object.keys(SERVICES);
+// Cross-cutting, behind toggles
+const HEALTH = ALL.filter(s=>s!=='control').map(from=>({ev:'heartbeat', from, to:['control'], kind:'health'}));
+const PRIVACY = [
+  {ev:'privacy.erasure_requested', from:'frontend', to:ALL.filter(s=>s!=='frontend'), kind:'privacy'},
+  {ev:'privacy.export_requested',  from:'frontend', to:ALL.filter(s=>s!=='frontend'), kind:'privacy'},
+  ...ALL.filter(s=>s!=='control').map(from=>({ev:'privacy.erased', from, to:['control'], kind:'privacy'})),
+  ...ALL.filter(s=>s!=='control').map(from=>({ev:'privacy.data_provided', from, to:['control'], kind:'privacy'})),
+];
+
+/* ----------------------------- LAYOUT ----------------------------- */
+const W=1000,H=760, cx=W/2, cy=380, R=292, NW=132, NH=46;
+const pos={};
+ORDER.forEach((id,i)=>{
+  const a = -Math.PI/2 + i*(2*Math.PI/ORDER.length);
+  pos[id] = {x: cx+R*Math.cos(a), y: cy+R*Math.sin(a)};
+});
+
+const SVG='http://www.w3.org/2000/svg';
+const svg=document.getElementById('svg');
+function el(t,attrs){const e=document.createElementNS(SVG,t);for(const k in attrs)e.setAttribute(k,attrs[k]);return e;}
+
+// arrow markers per kind
+const defs=el('defs',{});
+Object.entries(KIND).forEach(([k,v])=>{
+  const m=el('marker',{id:'ar/'+k,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto-start-reverse'});
+  m.appendChild(el('path',{d:'M0,0 L10,5 L0,10 z',fill:v.c}));
+  defs.appendChild(m);
+});
+svg.appendChild(defs);
+
+const gEdges=el('g',{}); svg.appendChild(gEdges);
+const gLabels=el('g',{}); svg.appendChild(gLabels);
+const gNodes=el('g',{}); svg.appendChild(gNodes);
+
+// Build the working edge list (one path per from→to pair)
+let edges=[];
+function rebuildEdges(){
+  let list=[...EVENTS];
+  if(document.getElementById('tHealth').checked) list=list.concat(HEALTH);
+  if(document.getElementById('tPriv').checked)   list=list.concat(PRIVACY);
+  edges=[];
+  list.forEach(e=>e.to.forEach(t=>{ if(t!==e.from) edges.push({ev:e.ev,from:e.from,to:t,kind:e.kind}); }));
+  drawEdges();
+  applyState();
+}
+
+function edgePath(a,b){
+  const p1=pos[a], p2=pos[b];
+  // control point pulled toward centre for a gentle arc
+  const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2;
+  const k=0.18; const ctlx=mx+(cx-mx)*k, ctly=my+(cy-my)*k;
+  return {d:`M${p1.x.toFixed(1)},${p1.y.toFixed(1)} Q${ctlx.toFixed(1)},${ctly.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`,
+          mid:{x:(p1.x+2*ctlx+p2.x)/4,y:(p1.y+2*ctly+p2.y)/4}};
+}
+
+function drawEdges(){
+  gEdges.innerHTML=''; gLabels.innerHTML='';
+  edges.forEach((e,i)=>{
+    const {d,mid}=edgePath(e.from,e.to);
+    const path=el('path',{class:'edge','data-i':i,d,stroke:KIND[e.kind].c,'marker-end':'url(#ar/'+e.kind+')'});
+    path.addEventListener('mouseenter',ev=>showTip(ev,e.ev+'  ·  '+SERVICES[e.from].name+' → '+SERVICES[e.to].name));
+    path.addEventListener('mousemove',moveTip);
+    path.addEventListener('mouseleave',hideTip);
+    gEdges.appendChild(path);
+    e._mid=mid;
+  });
+}
+
+/* ----------------------------- NODES ----------------------------- */
+ORDER.forEach(id=>{
+  const s=SERVICES[id], p=pos[id];
+  const g=el('g',{class:'node','data-id':id,transform:`translate(${(p.x-NW/2).toFixed(1)},${(p.y-NH/2).toFixed(1)})`});
+  g.appendChild(el('rect',{width:NW,height:NH,rx:10}));
+  const t=el('text',{x:NW/2,y:20,'text-anchor':'middle'}); t.textContent=s.name;
+  const t2=el('text',{x:NW/2,y:34,'text-anchor':'middle'});
+  const ts=el('tspan',{class:'lang'}); ts.textContent=s.lang.toUpperCase()+' · '+s.db; t2.appendChild(ts);
+  g.appendChild(t); g.appendChild(t2);
+  g.addEventListener('click',()=>select(id));
+  gNodes.appendChild(g);
+});
+
+/* ----------------------------- STATE ----------------------------- */
+let selected=null;
+function select(id){ selected = (selected===id? null : id); document.getElementById('picker').value = selected||''; applyState(); }
+
+function applyState(){
+  const showAll=document.getElementById('tAll').checked;
+  // nodes
+  gNodes.querySelectorAll('.node').forEach(n=>{
+    const id=n.getAttribute('data-id');
+    n.classList.toggle('sel', id===selected);
+    const related = !selected || id===selected || edges.some(e=>(e.from===selected&&e.to===id)||(e.to===selected&&e.from===id));
+    n.classList.toggle('dim', selected && !related);
+  });
+  // edges + labels
+  gLabels.innerHTML='';
+  gEdges.querySelectorAll('.edge').forEach(path=>{
+    const e=edges[+path.getAttribute('data-i')];
+    const touches = selected && (e.from===selected || e.to===selected);
+    path.classList.remove('show','hot','dimmed');
+    if(selected){ path.classList.add(touches?'hot':'dimmed'); }
+    else { path.classList.toggle('show', showAll); path.classList.toggle('dimmed', !showAll); }
+    if(touches){ // label the highlighted edges
+      const bg=el('rect',{class:'elabel-bg show'});
+      const lab=el('text',{class:'elabel show',x:e._mid.x,y:e._mid.y,'text-anchor':'middle'}); lab.textContent=e.ev;
+      gLabels.appendChild(bg); gLabels.appendChild(lab);
+      const bb=lab.getBBox(); bg.setAttribute('x',bb.x-3);bg.setAttribute('y',bb.y-1);bg.setAttribute('width',bb.width+6);bg.setAttribute('height',bb.height+2);bg.setAttribute('rx',3);
+    }
+  });
+  renderPanel();
+}
+
+/* ----------------------------- PANEL ----------------------------- */
+function renderPanel(){
+  const panel=document.getElementById('panel');
+  if(!selected){ panel.innerHTML = defaultPanel(); return; }
+  const s=SERVICES[selected];
+  const out = edges.filter(e=>e.from===selected);
+  const inc = edges.filter(e=>e.to===selected);
+  const grpOut = groupBy(out,'ev'); const grpIn = groupBy(inc,'ev');
+  panel.innerHTML = `
+    <h2>${s.name}<span class="lang">${s.lang} · ${s.db}</span></h2>
+    <div class="sor">${s.sor}</div>
+    <div class="hint">${s.note}</div>
+    <h3>Publishes → consumers (${Object.keys(grpOut).length})</h3>
+    ${evRows(grpOut,'out') || '<div class="hint">Pure consumer — emits no domain events (besides heartbeat &amp; privacy acks).</div>'}
+    <h3>Consumes ← from (${Object.keys(grpIn).length})</h3>
+    ${evRows(grpIn,'in') || '<div class="hint">Consumes no domain events in the current view.</div>'}
+    <h3>Internal blueprint</h3>
+    ${blueprintHTML(s)}
+  `;
+}
+function groupBy(arr,key){const m={};arr.forEach(e=>{(m[e[key]]=m[e[key]]||{kind:e.kind,svc:[]}).svc.push(e[ e.from===selected?'to':'from' ]);});return m;}
+function evRows(grp,dir){
+  const keys=Object.keys(grp); if(!keys.length) return '';
+  return '<ul class="evlist">'+keys.map(ev=>{
+    const g=grp[ev]; const names=g.svc.map(id=>SERVICES[id].name).join(', ');
+    return `<li><span class="swatch" style="background:${KIND[g.kind].c}"></span><span><code>${ev}</code><br><span class="to">${dir==='out'?'→ ':'← '}${names}</span></span></li>`;
+  }).join('')+'</ul>';
+}
+function blueprintHTML(s){
+  return `<div class="bp">
+    <div class="bus">RabbitMQ — ${escapeAttr(s.name)} owns <b>${blueprintExchange(s)}</b></div>
+    <div class="row">▲ publish&nbsp;&nbsp;&nbsp;&nbsp;consume ▼</div>
+    <div class="box out"><b>Outbox → validate-on-publish → relay</b><p>State change + event commit in one tx; relay retries until the bus is reachable (survives bus-down).</p></div>
+    <div class="box core"><b>domain/ — ${escapeAttr(s.name)} logic</b><p>${escapeAttr(s.note)}</p></div>
+    <div class="box db"><b>persistence/ — private ${escapeAttr(s.db)}</b><p>System of record + outbox + idempotent-inbox + event-store + last-processed marker. ${escapeAttr(s.sor)}.</p></div>
+    <div class="box in"><b>Inbox (idempotent) ← validate-on-consume ← DLQ/retry/parking</b><p>Dedupe by envelope id; invalid → log + dead-letter; poison → retry → terminal parking + alert.</p></div>
+    <div class="side">
+      <span class="chip">heartbeat 1s</span>
+      <span class="chip">JSON logs + correlationId</span>
+      <span class="chip">graceful shutdown</span>
+      <span class="chip">privacy.erasure handler + tombstone</span>
+      <span class="chip">two-sided /contract validation</span>
+    </div>
+  </div>`;
+}
+function blueprintExchange(s){const id=Object.keys(SERVICES).find(k=>SERVICES[k]===s);return (id==='bar'?'bar':id==='control'?'control':id)+'.events';}
+function defaultPanel(){
+  const leg=Object.entries(KIND).map(([k,v])=>`<span><i style="background:${v.c}"></i>${v.label}</span>`).join('');
+  return `
+    <h2>The platform at a glance</h2>
+    <div class="sor">10 services + Control Room on RabbitMQ. Bus-only between services; the wire <code>/contract</code> is the only coupling. Each box is a service — <b>click it</b> to see what it publishes, consumes, and how it's built inside.</div>
+    <h3>Edge colours</h3>
+    <div class="legend">${leg}</div>
+    <h3>Canonical service blueprint</h3>
+    <div class="hint">Every service is built from the same spine (the blueprint). Click a service to see <em>its</em> specifics filled in.</div>
+    ${blueprintHTML({name:'every service',lang:'Go / Python / TS',db:'SQLite (Postgres for Billing)',sor:'its own slice, keyed on masterId',note:'pure, unit-testable domain logic'})}
+    <h3>Reading the map</h3>
+    <ul class="evlist">
+      <li><span class="swatch" style="background:var(--accent)"></span><span>An <b>arrow</b> = one event type flowing publisher → consumer. Hover it for the name.</span></li>
+      <li><span class="swatch" style="background:var(--c-life)"></span><span><b>Click a service</b> to isolate its traffic and label its events.</span></li>
+      <li><span class="swatch" style="background:var(--c-health)"></span><span>Toggle <b>heartbeats</b> (every service → Control Room, 1s) and <b>privacy fan-out</b> (erasure/export across all) — hidden by default to reduce clutter.</span></li>
+    </ul>`;
+}
+function escapeAttr(x){return String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+/* ----------------------------- TOOLTIP ----------------------------- */
+const tip=document.getElementById('tip'), wrap=document.getElementById('graphwrap');
+function showTip(ev,txt){tip.textContent=txt;tip.style.opacity=1;moveTip(ev);}
+function moveTip(ev){const r=wrap.getBoundingClientRect();tip.style.left=(ev.clientX-r.left+12)+'px';tip.style.top=(ev.clientY-r.top+12)+'px';}
+function hideTip(){tip.style.opacity=0;}
+
+/* ----------------------------- WIRING ----------------------------- */
+const picker=document.getElementById('picker');
+ORDER.forEach(id=>{const o=document.createElement('option');o.value=id;o.textContent=SERVICES[id].name;picker.appendChild(o);});
+picker.addEventListener('change',()=>{selected=picker.value||null;applyState();});
+document.getElementById('tHealth').addEventListener('change',rebuildEdges);
+document.getElementById('tPriv').addEventListener('change',rebuildEdges);
+document.getElementById('tAll').addEventListener('change',applyState);
+document.getElementById('reset').addEventListener('click',()=>{selected=null;picker.value='';document.getElementById('tHealth').checked=false;document.getElementById('tPriv').checked=false;document.getElementById('tAll').checked=true;rebuildEdges();});
+svg.addEventListener('click',e=>{ if(e.target===svg){selected=null;picker.value='';applyState();} });
+
+rebuildEdges();
+</script>
+</body>
+</html>

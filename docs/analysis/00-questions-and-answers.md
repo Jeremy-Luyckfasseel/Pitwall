@@ -881,3 +881,52 @@ to the VPS. So a `dev` buffer protects nothing — `main` can be the single inte
 releasable. This **supersedes the "`dev` branch = integration" clause of Q2.4**; the "`dev` = *local
 environment*" mapping (Q2.6) stands — that was always about where code runs, not a git branch. Each
 story commit carries a `Story: <epic>.<story>` trailer (see `CONTRIBUTING.md`).
+
+## Round 22 — Front-of-house POS / counter, and the user-ownership model (2026-06-04)
+
+> Decided in the **`bmad-correct-course` workflow** (output:
+> `_bmad-output/planning-artifacts/sprint-change-proposal-2026-06-04.md`), triggered by reviewing the
+> system map (`docs/diagrams/pitwall-map.html`). The build had not started (epics & stories just done).
+> Primary item = a scope expansion (companion **[ADR-0014](../adr/0014-front-of-house-pos-counter.md)**);
+> secondary item = a clarification of the existing user model (no redesign). Still **10 services +
+> Control Room**.
+
+**Q22.1 — Should Bar/POS be just the bar, or the front-of-house counter?**
+A: **The front-of-house POS / counter.** Beyond bar sales it also (a) **registers walk-ins** on-site,
+(b) **sells & books track time** (live availability + `booking.requested`), and (c) **takes session
+payment incl. prepay**. The "POS" was previously the bar only; the counter experience (register + book +
+pay a session in one on-site interaction) was unmodeled. Booking stays the **single capacity authority**
+(FR23), Identity stays the **sole id-issuer** (FR1/ADR-0003), register-first (FR39) holds, and it's all
+**bus-only** (no inter-service API). New FRs **FR95–FR98**; persona **S2** broadened to "counter/bar
+staff". Naming unchanged (`bar-pos` / `bar.events`).
+
+**Q22.2 — How is session prepayment modeled on the bus?**
+A: **Reuse existing Billing primitives — no new money event.** A prepaid session is an
+**immediately-settled tab charge** (or `wallet.debited` for balance pay), accounted by the same
+gapless-numbering / MPV-VAT machinery as any other charge (FR59–61, FR87). Prepay is **in addition to**
+the existing postpaid tab-at-session-end path. Insufficient wallet → partial split / card-cash fallback
+(FR87). *(Rejected: a new `booking.paid`/`pos.session_paid` event — unnecessary given the reuse.)*
+
+**Q22.3 — Who publishes the on-site registration intent for a walk-in?**
+A: **The POS owns counter registration.** Bar/POS captures the email and publishes
+`identity.lookup_requested` itself, consuming `identity.resolved` to issue the QR/transponder — so the
+POS is genuinely the counter. *(Rejected: delegating to the Timing/kiosk check-in flow.)* It still never
+mints a `masterId`; Identity resolves it (register-first, FR39).
+
+**Q22.4 — "Every service should be able to CRUD a user" — what does the model actually allow?**
+A: **Each service fully CRUDs the *slice of the user it owns*; that is the model, and it is already
+satisfied.** Clarifying the ownership split (no redesign — preserves [ADR-0002](../adr/0002-event-carried-state-transfer.md)
+ECST + [ADR-0003](../adr/0003-identity-as-uuid-issuer.md) sole-issuer):
+→ **Identity** is only the **thin UUID issuer** (`masterId` + email) — *not* the user's rich profile.
+→ **CRM is THE rich customer/user master** (legal name, contacts, address, company link, consent,
+loyalty); **Driver** is the **racing-identity master** (number, nickname, kart class, stats, history,
+PR). The "user" is a **composition of owned slices**, not one blob.
+→ **Create** can be *initiated from any admin surface* (CRM, POS counter, website) but **always routes
+through Identity** for the one canonical id, then fans out. **Read** = every service holds a local copy
+of the slices it needs (ECST). **Update** = each service edits only the fields it owns; cross-owned
+fields are **read-only event-fed replicas**. **Delete** = the **erasure saga** (`privacy.erasure_requested`,
+one coordinated compliant delete). → The two things forbidden — *minting your own id* and *overwriting a
+field another service owns* — are exactly what would cause unlinkable duplicates and unresolvable
+write-conflicts; their absence is the design working, not a gap.
+→ `identity.resolved` deliberately carries only `{requestId, email, masterId}`; **rich user data
+propagates from CRM (`crm.person_updated`) and Driver (`driver.profile_updated`)**, not from Identity.

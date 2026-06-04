@@ -21,3 +21,4 @@ Format: Context → Decision → Consequences. Status is `Accepted` unless noted
 | [0011](./0011-external-payments-edge.md) | The external payments edge (online stored value) |
 | [0012](./0012-control-room-observability-and-ai-agent.md) | Control Room observability tap & the (deferred) external AI agent |
 | [0013](./0013-admin-ai-assistant.md) | Admin AI Assistant (read-model-backed analytics + bus-intent writes) |
+| [0014](./0014-front-of-house-pos-counter.md) | Front-of-house POS / on-site counter (register + book + prepay track time) |
