@@ -88,9 +88,10 @@ CI **gates** on all four. No merge to `dev`/`prod` with a red pipeline.
 
 | Stage | Behaviour |
 |---|---|
-| **On PR to `main`** (from a `story/*` branch) | lint + type-check + unit + integration + contract + smoke; build images. **No merge on red.** GitHub Flow — no long-lived `dev` branch (Round 21); integration runs locally via Compose. |
+| **On PR to `main`** (from a `story/*` branch) | lint + type-check + unit + integration + contract + smoke + **security scans** (below); build images. **No merge on red.** GitHub Flow — no long-lived `dev` branch (Round 21); integration runs locally via Compose. |
 | **On push to `main`** (squash-merge) | same gates; `main` is the always-green release line. Merging does **not** deploy. |
 | **On per-service tag** `‹svc›-vX.Y.Z` | CI builds that service's image, pushes to **GHCR**, then the **VPS pulls** and `docker compose up -d` recreates **only that container**. Independent per-team releases in one repo. |
+| **Security scanning** (Round 23) | Secret scanning (GitHub native + push-protection; gitleaks fallback) — **blocking**. SAST (CodeQL) — **blocking on high/critical**. Dependency/SCA (Dependabot + govulncheck/pip-audit/npm audit) and container image scan (Trivy) — **advisory** (Security tab). Phased in per language (Go @ 1.3, Python @ 3.1, TS @ 4.x/5.x); secret scanning applies from the scaffold. |
 | **Secrets** | `.env` on the VPS (and locally); CI holds only GHCR + SSH deploy creds. |
 | **Rollback** | redeploy the previous tag's image (immutable images in GHCR). |
 
@@ -106,6 +107,27 @@ Branch→environment and tag→release rationale:
 - Inter-service trust is via the bus; there are **no inter-service APIs** to
   authenticate (the single Control Room→Mailing bus-down exception aside).
 
+### Automated security scanning (Round 23)
+
+Beyond the secure-by-design rules above, CI **scans for what slips through anyway** — four
+categories, GitHub-native-first + Trivy, **phased in as the code to scan appears** (walking-skeleton-first):
+
+- **Secret scanning** — GitHub secret scanning + **push protection** (native); **gitleaks** is the
+  portable CI gate where native GHAS isn't available (e.g. a private repo). **Blocking.** Applies from
+  the scaffold (a repo can leak a secret before any service exists). *(Open sub-detail, not assumed:
+  repo visibility / GHAS availability — confirm at enablement.)*
+- **Dependency / SCA** — **Dependabot** alerts + update PRs, backed by a per-language vuln check in CI:
+  **govulncheck** (Go), **pip-audit** (Python), **npm audit** (TS). **Advisory** (reports, does not block).
+- **SAST** — **CodeQL** (Go / Python / JS-TS). **Blocking on high/critical** findings; lower severities
+  advisory.
+- **Container images** — **Trivy** scans the built service images for OS/package CVEs. **Advisory.**
+
+Phasing: secret scanning now; CodeQL + govulncheck + Trivy at **Story 1.3** (first Go service), CodeQL
+Python + pip-audit at **3.1**, CodeQL JS/TS + npm audit at the **TS tier (4.x/5.x)**. Each scan is
+path-filtered like the rest of CI (AR17). Rationale + alternatives weighed:
+[Q&A Round 23](00-questions-and-answers.md#round-23--security-ci-scanning-scope-tooling-phasing--enforcement-2026-06-04).
+This is an engineering-standards addition (no service/bus/`/contract` change) → **no ADR**.
+
 ## 8. Definition of Done (per change)
 
 - [ ] Conforms to the **service blueprint** ([04](./04-service-blueprint.md)).
@@ -116,5 +138,7 @@ Branch→environment and tag→release rationale:
 - [ ] Sad paths for the change are handled and reflected in the service's sad-path
       table.
 - [ ] Structured logs with correlation id; no secrets leaked.
+- [ ] Security scans green for the change: no detected secret, no new high/critical SAST
+      finding (dependency/image findings triaged, not necessarily blocking) — Round 23.
 - [ ] Service `README.md` and the relevant analysis doc updated if behaviour changed.
 - [ ] A decision that changes architecture gets an **ADR**.
