@@ -12,6 +12,13 @@ __pycache__/
 bin/
 obj/
 
+# Go build/test artifacts (binaries are built in Docker; modules fetched fresh)
+*.exe
+*.test
+*.out
+# Runtime liveness touch-files (bus-only health) — never committed
+*.live
+
 # Logs & local data
 *.log
 data/

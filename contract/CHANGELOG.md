@@ -11,6 +11,14 @@ side by side). See [`README.md`](README.md) for the normative wire rules.
 ## [Unreleased]
 
 ### Added
+- **`control/control.heartbeat.v1`** data-payload schema + valid example + known-bad fixture — the 1 s
+  bus-only liveness signal emitted by **every** service (payload `service`, `at`, `instanceId`; `at`
+  carries the canonical timestamp `pattern`). Like `privacy.erased`, it is **cross-cutting**: each
+  service publishes it to its **own** `<service>.events` exchange (`source` names the emitter, routing
+  key `control.heartbeat`); the `control` namespace is the catalog grouping, not the owning exchange.
+  The known-bad fixture breaks the `at` wire-format (uses a `+00:00` offset instead of `…mmmZ`).
+  Routing key is `control.heartbeat` (not a bare `heartbeat`) because the envelope `type` requires the
+  `<entity>.<action>` form (Q&A Round 25). *(Story 1.3)*
 - **`timing/session.started.v1`** and **`timing/session.ended.v1`** data-payload schemas + valid
   examples — the two remaining walking-skeleton events (`session.started`: `sessionId`, `startedAt`;
   `session.ended`: `sessionId`, `endedAt`, `summary[]`). `summary[]` item shape is intentionally

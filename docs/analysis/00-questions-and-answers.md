@@ -996,3 +996,41 @@ four test layers (unit · integration on real RabbitMQ+DB · contract · e2e smo
 the layers are the **what**. Recorded in **[03 §3](03-engineering-standards.md)** + the **Definition of
 Done** (03 §8 and `CLAUDE.md` §5). **Story 1.1** (scaffold/infra) predates this and is exempt; **from
 Story 1.2 onward** it applies. Every `dev-story` session implements test-first by default.
+
+## Round 25 — Heartbeat contract & the Go service skeleton host (2026-06-04)
+
+> Decided during the build phase (Epic 1, **Story 1.3** — the Go service skeleton). Resolves a genuine
+> contradiction in the existing docs and an under-specified host choice surfaced while creating the story.
+> The heartbeat-`type` decision **touches the wire** (`/contract`), so it is contract-significant; the
+> others are build placement. No new ADR (no architectural rule changes — it *removes* an ambiguity within
+> the existing envelope rule + bus topology).
+
+**Q25.1 — What is the heartbeat event's `type` / routing key?**
+A: **`control.heartbeat`** (entity `control`, action `heartbeat`). The event catalog
+([02 §4 `control.events`](02-message-bus-and-contracts.md)) listed the routing key as a bare `heartbeat`,
+but the committed `envelope.schema.json` pins `type` to `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$` — an
+`<entity>.<action>` form with a **mandatory dot** (Story 1.1). A bare `heartbeat` would fail its own
+envelope schema. `control.heartbeat` satisfies the pattern and groups naturally with the other
+`control.*` liveness events (`control.selfping`). **Ownership is unchanged:** per the cross-cutting-event
+rule ([02 §4](02-message-bus-and-contracts.md), same as `privacy.erased`), each service publishes its own
+heartbeat **to its own `<service>.events` exchange** (the `source` field names the emitter); the Control
+Room binds with a wildcard and aggregates. The `control.events` catalog row is a *logical* grouping, not
+the owning exchange. **Update [02 §4](02-message-bus-and-contracts.md)** to write the routing key as
+`control.heartbeat` and to note it is emitted to each service's own exchange.
+
+**Q25.2 — Is the heartbeat schema added to `/contract` now (Story 1.3), and is it validated on publish?**
+A: **Yes — add it now and validate-on-publish.** The [service blueprint](04-service-blueprint.md) mandates
+validating **every** message in and out against `/contract`, and the repo's standing promise is that every
+event ships a valid example **and** a known-bad fixture (proved by `check-invalid-fixtures.py`, Story 1.2).
+Story 1.3 therefore adds `contract/schemas/control/heartbeat.v1.schema.json` + a valid `*.example.json` +
+a known-bad `*.invalid.json` (data payload: `service`, `at`, `instanceId`), and the Go skeleton validates
+each heartbeat envelope **before** publishing. This is distinct from Story 1.4's "validate-on-publish via
+the **outbox relay**": the heartbeat is **ephemeral liveness, not outbox-backed** (you never replay a stale
+heartbeat), so it is published directly on the 1 s ticker with its own pre-publish validation.
+
+**Q25.3 — Which service directory hosts the inline Go skeleton built in Story 1.3?**
+A: **`services/timing/`.** The architecture builds the blueprint machinery **inline** in Epic 1 and
+**extracts** `libs/go-pitwall` in Epic 2 ([architecture §"Grow it, don't pre-scaffold it"]). Timing is the
+first service to come alive and Stories **1.5** (simulator), **1.6** (lap-validity) and **1.8** (session
+lifecycle) build **directly** on this skeleton — so hosting it in `services/timing/` throws nothing away
+(grow-don't-pre-scaffold, AR15) rather than building a disposable template service.
