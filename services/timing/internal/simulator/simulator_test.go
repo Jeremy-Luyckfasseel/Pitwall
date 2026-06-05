@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/rand"
+	"reflect"
 	"regexp"
 	"testing"
 	"time"
@@ -17,13 +18,14 @@ func marshal(e messaging.Envelope) ([]byte, error) { return json.Marshal(e) }
 
 func testConfig(rng *rand.Rand) Config {
 	return Config{
-		Drivers:     4,
-		LapMeanMs:   45000,
-		LapStddevMs: 2000,
-		SessionLaps: 5,
-		Source:      "timing",
-		Rng:         rng,
-		Now:         func() time.Time { return time.Date(2026, 6, 5, 14, 0, 0, 0, time.UTC) },
+		Drivers:      4,
+		LapMeanMs:    45000,
+		LapStddevMs:  2000,
+		SessionLaps:  5,
+		MinLapTimeMs: 10000, // filter active, but well below the mean -> rejects nothing
+		Source:       "timing",
+		Rng:          rng,
+		Now:          func() time.Time { return time.Date(2026, 6, 5, 14, 0, 0, 0, time.UTC) },
 	}
 }
 
@@ -95,6 +97,38 @@ func TestGenerateSession_CoherentValidatedStream(t *testing.T) {
 	for id, max := range perDriverMax {
 		if max != testConfig(nil).SessionLaps {
 			t.Errorf("driver %s max lapNumber = %d, want %d", id, max, testConfig(nil).SessionLaps)
+		}
+	}
+}
+
+// AC4: with the min-lap filter active on clean (above-threshold) input the
+// simulator's output is identical to the unfiltered case — the filter rejects
+// nothing, so the same seed + base time yields the same stream regardless of
+// MinLapTimeMs.
+func TestGenerateSession_FilterActiveLeavesCleanStreamUnchanged(t *testing.T) {
+	base := time.Date(2026, 6, 5, 14, 0, 0, 0, time.UTC)
+
+	off := testConfig(rand.New(rand.NewSource(11)))
+	off.MinLapTimeMs = 0 // filter off
+	a := New(off).GenerateSession(base)
+
+	on := testConfig(rand.New(rand.NewSource(11)))
+	on.MinLapTimeMs = 10000 // filter on, below the 45 s mean
+	b := New(on).GenerateSession(base)
+
+	if len(a) != len(b) {
+		t.Fatalf("filter changed the stream length: off=%d on=%d", len(a), len(b))
+	}
+	// Compare the deterministic, filter-relevant fields (type, occurredAt, data
+	// payload). Envelope id/correlationId come from uuid.NewV7() per call and are
+	// expectedly non-deterministic — they are not what the filter affects.
+	for i := range a {
+		if a[i].Type != b[i].Type || a[i].OccurredAt != b[i].OccurredAt {
+			t.Errorf("event %d type/time differs with the filter on: %q@%s vs %q@%s",
+				i, a[i].Type, a[i].OccurredAt, b[i].Type, b[i].OccurredAt)
+		}
+		if !reflect.DeepEqual(a[i].Data, b[i].Data) {
+			t.Errorf("event %d data differs with the filter on: %+v vs %+v", i, a[i].Data, b[i].Data)
 		}
 	}
 }

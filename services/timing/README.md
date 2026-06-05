@@ -2,12 +2,11 @@
 
 The lap-timing service (Go). This directory holds the **Go service skeleton on the
 bus** (Story 1.3), the **transactional outbox + relay reliability spine**
-(Story 1.4), and the **development simulator** (Story 1.5) — the inline blueprint
-blocks every Pitwall Go service is built from. The remaining Timing domain
-(min-lap-time validity filter, session lifecycle/out-of-order tolerance, scanner
-offline, PR detection) arrives in Stories 1.6–1.8 + Epic 3; the blueprint
-machinery here is **extracted** to `libs/go-pitwall` in Epic 2
-(grow-don't-pre-scaffold).
+(Story 1.4), the **development simulator** (Story 1.5), and the **lap-validity
+filter** (Story 1.6) — the inline blueprint blocks every Pitwall Go service is built
+from. The remaining Timing domain (session lifecycle/out-of-order tolerance, scanner
+offline, PR detection) arrives in Stories 1.7–1.8 + Epic 3; the blueprint machinery
+here is **extracted** to `libs/go-pitwall` in Epic 2 (grow-don't-pre-scaffold).
 
 ## What it owns (today)
 
@@ -39,15 +38,23 @@ machinery here is **extracted** to `libs/go-pitwall` in Epic 2
   subsequent crossing emits a lap with `lapTimeMs` = delta from the previous
   crossing. Lap times are drawn from a configurable normal distribution; a
   `SIM_SEED` makes a session reproducible.
+- **Lap-validity filter** (Story 1.6 — `MIN_LAP_TIME_MS`, FR35). The pure
+  per-driver crossing→lap rule (`internal/domain`) rejects a crossing closer than
+  `MIN_LAP_TIME_MS` to the driver's previous **valid** crossing as a
+  **bounce/duplicate** read: it is ignored (no `lap.recorded`) and does **not**
+  advance the driver's baseline, so the next real lap is still timed from the last
+  valid crossing. The first crossing stays the uncounted start marker, and validity
+  is tracked **per driver**. The simulator keeps `SIM_LAP_MEAN_MS` well above
+  `MIN_LAP_TIME_MS`, so on clean simulated input the filter rejects nothing.
 
 > **Fixture masterIds are NOT an identity path.** The simulator mints N valid-format
 > UUID-v4 ids locally for its drivers; real Identity-issued ids replace them in
 > Epic 2. No id-minting path is baked into the skeleton.
 >
 > The producer seam is `relay.NewEnqueuer(db, store, validate, relay)` (commits the
-> outbox row in its own tx, then kicks the relay). The **minimum-lap-time bounce
-> filter** (Story 1.6), **session lifecycle / out-of-order tolerance** (1.8), and the
-> **event store + replay** (ADR-0005, Stories 1.10) are deliberately not here.
+> outbox row in its own tx, then kicks the relay). **Session lifecycle / out-of-order
+> tolerance** (1.8) and the **event store + replay** (ADR-0005, Story 1.10) are
+> deliberately not here.
 
 ## Events
 
@@ -108,13 +115,17 @@ go test -tags=integration ./test/integration/...# real RabbitMQ via testcontaine
 | `SIM_LAP_MEAN_MS` | *(required when on)* | normal-distribution mean lap time (ms, ≥ 1) |
 | `SIM_LAP_STDDEV_MS` | *(required when on)* | normal-distribution stddev (ms, ≥ 0) |
 | `SIM_SESSION_LAPS` | *(required when on)* | counted laps per driver before the session ends (≥ 1) |
+| `MIN_LAP_TIME_MS` | *(required when on)* | lap-validity rule (FR35): crossings closer than this are rejected as bounce/duplicate (≥ 1; must be **below** `SIM_LAP_MEAN_MS`) |
 | `SIM_TICK_MS` | `250` | wall-clock pacing between emitted events |
 | `SIM_SESSION_GAP_MS` | `5000` | pause between sessions in the continuous loop |
 | `SIM_SEED` | *(time-seeded)* | optional integer for a reproducible session |
 
-When `SIMULATOR_ENABLED` is on, the four **required** knobs above must be set or the
+When `SIMULATOR_ENABLED` is on, the five **required** knobs above must be set or the
 service **fails fast** at startup naming each missing/invalid one (golden rule — never
-assumed). The pacing knobs are correctness-neutral and default.
+assumed); it also fails fast if `MIN_LAP_TIME_MS >= SIM_LAP_MEAN_MS` (which would reject
+most laps). The pacing knobs are correctness-neutral and default. `MIN_LAP_TIME_MS` is
+the lap-validity rule for every crossing, not strictly a simulator knob — it is required
+when the simulator is on because that is the only crossing source today (Epic 1).
 
 ## Layout
 
@@ -126,7 +137,7 @@ internal/messaging/          # envelope + domain-event builders, validate-on-pub
                              #   index), exchange, publisher + confirm-mode channel
 internal/persistence/        # SQLite open + pragmas, goose migrations, the outbox store
 internal/relay/              # the outbox relay loop + EnqueueEnvelope / NewEnqueuer producer seam
-internal/domain/             # pure crossing -> lap rule (start marker, per-driver delta/lapNumber)
+internal/domain/             # pure crossing -> lap rule (start marker, per-driver delta/lapNumber, min-lap filter)
 internal/simulator/          # the env-toggled simulator: drivers, distribution, session lifecycle
 internal/heartbeat/          # 1 s emitter + liveness touch-file
 internal/hygiene/            # source guard test (no bare prints)

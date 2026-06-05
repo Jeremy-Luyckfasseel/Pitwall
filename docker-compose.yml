@@ -62,15 +62,17 @@ services:
       CONTRACT_DIR: /contract               # the /contract tree COPYed into the image
       DB_PATH: ${DB_PATH:-/data/timing.db}  # private SQLite DB on the durable volume below
       OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-200}
-      # Simulator (Story 1.5). ON by default for the local demo; set
-      # SIMULATOR_ENABLED=false in .env to run the bare heartbeat-only service.
-      # When on, the data-shaping knobs are REQUIRED (the service fails fast if
-      # any is unset) — defaults below keep the bare `compose config` valid.
+      # Simulator (Story 1.5) + lap-validity filter (Story 1.6). ON by default
+      # for the local demo; set SIMULATOR_ENABLED=false in .env to run the bare
+      # heartbeat-only service. When on, the data-shaping knobs and MIN_LAP_TIME_MS
+      # are REQUIRED (the service fails fast if any is unset) — defaults below keep
+      # the bare `compose config` valid. MIN_LAP_TIME_MS must be below SIM_LAP_MEAN_MS.
       SIMULATOR_ENABLED: ${SIMULATOR_ENABLED:-true}
       SIM_DRIVERS: ${SIM_DRIVERS:-8}
       SIM_LAP_MEAN_MS: ${SIM_LAP_MEAN_MS:-45000}
       SIM_LAP_STDDEV_MS: ${SIM_LAP_STDDEV_MS:-2000}
       SIM_SESSION_LAPS: ${SIM_SESSION_LAPS:-10}
+      MIN_LAP_TIME_MS: ${MIN_LAP_TIME_MS:-10000}
       SIM_TICK_MS: ${SIM_TICK_MS:-250}
       SIM_SESSION_GAP_MS: ${SIM_SESSION_GAP_MS:-5000}
       SIM_SEED: ${SIM_SEED:-}

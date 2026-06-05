@@ -120,20 +120,21 @@ func run() int {
 	var sim *simulator.Simulator
 	if cfg.SimulatorEnabled {
 		sim = simulator.New(simulator.Config{
-			Drivers:     cfg.SimDrivers,
-			LapMeanMs:   cfg.SimLapMeanMs,
-			LapStddevMs: cfg.SimLapStddevMs,
-			SessionLaps: cfg.SimSessionLaps,
-			Tick:        time.Duration(cfg.SimTickMs) * time.Millisecond,
-			SessionGap:  time.Duration(cfg.SimSessionGapMs) * time.Millisecond,
-			Source:      cfg.ServiceName,
-			Rng:         seedRNG(cfg),
-			Now:         time.Now,
-			Enqueue:     enqueue,
-			Log:         log,
+			Drivers:      cfg.SimDrivers,
+			LapMeanMs:    cfg.SimLapMeanMs,
+			LapStddevMs:  cfg.SimLapStddevMs,
+			SessionLaps:  cfg.SimSessionLaps,
+			MinLapTimeMs: cfg.MinLapTimeMs,
+			Tick:         time.Duration(cfg.SimTickMs) * time.Millisecond,
+			SessionGap:   time.Duration(cfg.SimSessionGapMs) * time.Millisecond,
+			Source:       cfg.ServiceName,
+			Rng:          seedRNG(cfg),
+			Now:          time.Now,
+			Enqueue:      enqueue,
+			Log:          log,
 		})
 		log.Info("simulator enabled", "drivers", cfg.SimDrivers, "sessionLaps", cfg.SimSessionLaps,
-			"lapMeanMs", cfg.SimLapMeanMs, "lapStddevMs", cfg.SimLapStddevMs)
+			"lapMeanMs", cfg.SimLapMeanMs, "lapStddevMs", cfg.SimLapStddevMs, "minLapTimeMs", cfg.MinLapTimeMs)
 	}
 
 	// Run until SIGTERM/SIGINT.

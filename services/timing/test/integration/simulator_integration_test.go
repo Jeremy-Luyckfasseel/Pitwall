@@ -51,17 +51,18 @@ func TestSimulatorStreamsValidSessionThroughOutbox(t *testing.T) {
 	enqueue := relay.NewEnqueuer(db, store, validatorFor(t), r)
 
 	sim := simulator.New(simulator.Config{
-		Drivers:     drivers,
-		LapMeanMs:   45000,
-		LapStddevMs: 2000,
-		SessionLaps: laps,
-		Tick:        0,         // stream as fast as the broker confirms (no sleeps)
-		SessionGap:  time.Hour, // only one session within the test window
-		Source:      "timing",
-		Rng:         rand.New(rand.NewSource(1)),
-		Now:         time.Now,
-		Enqueue:     enqueue,
-		Log:         logging.New(testWriter{t}, "timing", itCorrelationID, "error"),
+		Drivers:      drivers,
+		LapMeanMs:    45000,
+		LapStddevMs:  2000,
+		SessionLaps:  laps,
+		MinLapTimeMs: 10000,     // filter active (Story 1.6) but below the mean -> rejects nothing (AC4)
+		Tick:         0,         // stream as fast as the broker confirms (no sleeps)
+		SessionGap:   time.Hour, // only one session within the test window
+		Source:       "timing",
+		Rng:          rand.New(rand.NewSource(1)),
+		Now:          time.Now,
+		Enqueue:      enqueue,
+		Log:          logging.New(testWriter{t}, "timing", itCorrelationID, "error"),
 	})
 
 	// Independent contexts: stopping the simulator (no new sessions) must NOT

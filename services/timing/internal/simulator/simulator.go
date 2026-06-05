@@ -11,8 +11,10 @@
 //
 // Determinism: generation is driven by an injected *rand.Rand and a virtual
 // clock, so a seed reproduces a session exactly (used by tests and reproducible
-// demos). The minimum-lap-time bounce filter is NOT here — that is Story 1.6;
-// this simulator only generates clean, above-threshold laps.
+// demos). The minimum-lap-time bounce filter (Story 1.6) runs inside each
+// per-driver domain.LapTracker, but the simulator only ever generates clean,
+// above-threshold laps (SIM_LAP_MEAN_MS is kept well above MIN_LAP_TIME_MS), so
+// the filter rejects nothing here — its output is identical with the filter on.
 package simulator
 
 import (
@@ -31,17 +33,18 @@ import (
 
 // Config wires the simulator's parameters and dependencies.
 type Config struct {
-	Drivers     int           // N fixture drivers (>= 1)
-	LapMeanMs   int           // normal-distribution mean lap time
-	LapStddevMs int           // normal-distribution stddev
-	SessionLaps int           // counted laps per driver before the session ends
-	Tick        time.Duration // wall-clock pacing between emitted events (0 = no pacing)
-	SessionGap  time.Duration // pause between sessions in the continuous loop
-	Source      string        // envelope `source` (== service name, "timing")
-	Rng         *rand.Rand    // injected RNG (deterministic under a seed)
-	Now         func() time.Time
-	Enqueue     func(ctx context.Context, env messaging.Envelope) error // outbox seam
-	Log         *slog.Logger
+	Drivers      int           // N fixture drivers (>= 1)
+	LapMeanMs    int           // normal-distribution mean lap time
+	LapStddevMs  int           // normal-distribution stddev
+	SessionLaps  int           // counted laps per driver before the session ends
+	MinLapTimeMs int           // lap-validity filter threshold (FR35); 0 = off
+	Tick         time.Duration // wall-clock pacing between emitted events (0 = no pacing)
+	SessionGap   time.Duration // pause between sessions in the continuous loop
+	Source       string        // envelope `source` (== service name, "timing")
+	Rng          *rand.Rand    // injected RNG (deterministic under a seed)
+	Now          func() time.Time
+	Enqueue      func(ctx context.Context, env messaging.Envelope) error // outbox seam
+	Log          *slog.Logger
 }
 
 // Simulator generates and emits simulated sessions. Construct it with New.
@@ -138,7 +141,7 @@ func (s *Simulator) GenerateSession(base time.Time) []messaging.Envelope {
 
 	trackers := make(map[string]*domain.LapTracker, len(s.drivers))
 	for _, drv := range s.drivers {
-		trackers[drv] = &domain.LapTracker{}
+		trackers[drv] = &domain.LapTracker{MinLapTimeMs: int64(s.cfg.MinLapTimeMs)}
 	}
 
 	out := make([]messaging.Envelope, 0, len(crossings)+2)
@@ -152,9 +155,12 @@ func (s *Simulator) GenerateSession(base time.Time) []messaging.Envelope {
 	var lastAt time.Time = base
 
 	for _, c := range crossings {
-		lap, ok := trackers[c.driver].Cross(c.at)
-		if !ok {
-			continue // out-lap: recorded, not a counted lap
+		lap, outcome := trackers[c.driver].Cross(c.at)
+		if outcome != domain.Counted {
+			// StartMarker (out-lap) or Rejected (sub-MIN bounce): no lap emitted.
+			// On clean simulator input Rejected never occurs; a real hardware
+			// ingestion path (Epic 2/3) would log the rejected bounce here.
+			continue
 		}
 		out = append(out, messaging.NewLapRecordedEnvelope(
 			s.cfg.Source, correlationID, c.driver, sessionID, lap.LapNumber, lap.LapTimeMs, nil, c.at))

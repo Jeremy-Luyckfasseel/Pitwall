@@ -40,6 +40,12 @@ type Config struct {
 	SimSessionGapMs  int   // pause between sessions in the continuous loop; optional, default 5000
 	SimSeed          int64 // optional RNG seed; deterministic when set
 	SimSeedSet       bool  // whether SIM_SEED was provided
+
+	// MinLapTimeMs is the lap-validity rule (FR35, Story 1.6): a crossing closer
+	// than this to the previous valid one is rejected as a bounce/duplicate. It is
+	// REQUIRED when the simulator is on (the only crossing source in Epic 1) and
+	// inert (0) when off — so the heartbeat-only path gains no new required var.
+	MinLapTimeMs int
 }
 
 // requiredVars must be present and non-empty.
@@ -120,8 +126,19 @@ func loadSimulator(getenv func(string) string, cfg *Config) error {
 	cfg.SimLapMeanMs = requirePositive(getenv, "SIM_LAP_MEAN_MS", &problems)
 	cfg.SimLapStddevMs = requireNonNegative(getenv, "SIM_LAP_STDDEV_MS", &problems)
 	cfg.SimSessionLaps = requirePositive(getenv, "SIM_SESSION_LAPS", &problems)
+	// MIN_LAP_TIME_MS is the lap-validity rule (FR35); required when the simulator
+	// is on (it is the only crossing source in Epic 1).
+	cfg.MinLapTimeMs = requirePositive(getenv, "MIN_LAP_TIME_MS", &problems)
 	if len(problems) > 0 {
 		return fmt.Errorf("simulator is enabled but its config is invalid: %s", strings.Join(problems, "; "))
+	}
+
+	// Guard: a min-lap-time at or above the lap-time mean would reject most/all
+	// simulated laps and empty the demo stream — a silent misconfiguration. Fail
+	// fast naming both knobs (golden rule). (Only checked once both parsed clean.)
+	if cfg.MinLapTimeMs >= cfg.SimLapMeanMs {
+		return fmt.Errorf("MIN_LAP_TIME_MS (%d) must be below SIM_LAP_MEAN_MS (%d), else the simulator would reject most laps",
+			cfg.MinLapTimeMs, cfg.SimLapMeanMs)
 	}
 
 	// Optional, correctness-neutral pacing knobs (defaults allowed).
