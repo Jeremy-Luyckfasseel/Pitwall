@@ -36,6 +36,10 @@ services:
   # control.heartbeat to its own timing.events exchange; liveness is bus-only.
   # Story 1.4 adds a private SQLite DB (timing-data volume) + transactional
   # outbox + relay (publishes durably; survives a bus outage and a restart).
+  # Story 1.5 adds the env-toggled simulator (SIMULATOR_ENABLED): when on, it
+  # streams session.started -> lap.recorded -> session.ended for N fixture
+  # drivers through the outbox — the local walking-skeleton demo. ON by default
+  # here (dev), so a bare `compose up` shows a live lap stream.
   timing:
     build:
       context: .                            # repo root — the service needs /contract (outside its dir)
@@ -58,6 +62,18 @@ services:
       CONTRACT_DIR: /contract               # the /contract tree COPYed into the image
       DB_PATH: ${DB_PATH:-/data/timing.db}  # private SQLite DB on the durable volume below
       OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-200}
+      # Simulator (Story 1.5). ON by default for the local demo; set
+      # SIMULATOR_ENABLED=false in .env to run the bare heartbeat-only service.
+      # When on, the data-shaping knobs are REQUIRED (the service fails fast if
+      # any is unset) — defaults below keep the bare `compose config` valid.
+      SIMULATOR_ENABLED: ${SIMULATOR_ENABLED:-true}
+      SIM_DRIVERS: ${SIM_DRIVERS:-8}
+      SIM_LAP_MEAN_MS: ${SIM_LAP_MEAN_MS:-45000}
+      SIM_LAP_STDDEV_MS: ${SIM_LAP_STDDEV_MS:-2000}
+      SIM_SESSION_LAPS: ${SIM_SESSION_LAPS:-10}
+      SIM_TICK_MS: ${SIM_TICK_MS:-250}
+      SIM_SESSION_GAP_MS: ${SIM_SESSION_GAP_MS:-5000}
+      SIM_SEED: ${SIM_SEED:-}
     volumes:
       - timing-data:/data                   # private DB survives `down` (without -v) and restarts
     healthcheck:

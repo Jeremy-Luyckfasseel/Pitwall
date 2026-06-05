@@ -27,6 +27,19 @@ type Config struct {
 	DBPath             string // private SQLite database (Story 1.4)
 	InstanceID         string // optional; minted at startup if empty
 	ContractDir        string // optional; resolved by the validator if empty
+
+	// Simulator (Story 1.5). The toggle defaults OFF; when ON, the data-shaping
+	// knobs are REQUIRED (fail fast, never assumed — AC2). The pacing knobs are
+	// correctness-neutral and may default.
+	SimulatorEnabled bool
+	SimDrivers       int   // N drivers; required when on, >= 1
+	SimLapMeanMs     int   // normal-distribution mean lap time; required when on, >= 1
+	SimLapStddevMs   int   // normal-distribution stddev; required when on, >= 0
+	SimSessionLaps   int   // counted laps per driver before the session ends; required when on, >= 1
+	SimTickMs        int   // wall-clock pacing between emission rounds; optional, default 250
+	SimSessionGapMs  int   // pause between sessions in the continuous loop; optional, default 5000
+	SimSeed          int64 // optional RNG seed; deterministic when set
+	SimSeedSet       bool  // whether SIM_SEED was provided
 }
 
 // requiredVars must be present and non-empty.
@@ -81,7 +94,110 @@ func Load(getenv func(string) string) (*Config, error) {
 		InstanceID:         getenv("INSTANCE_ID"),
 		ContractDir:        getenv("CONTRACT_DIR"),
 	}
+
+	if err := loadSimulator(getenv, cfg); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+// loadSimulator parses the simulator toggle and, when it is on, the required
+// data-shaping knobs (golden rule: fail fast naming every missing/invalid knob,
+// never assume — AC2). Pacing knobs are correctness-neutral and default.
+func loadSimulator(getenv func(string) string, cfg *Config) error {
+	enabled, err := boolEnv(getenv, "SIMULATOR_ENABLED", false)
+	if err != nil {
+		return err
+	}
+	cfg.SimulatorEnabled = enabled
+	if !enabled {
+		return nil
+	}
+
+	// Required, data-shaping knobs — collect ALL problems so one run reports them all.
+	var problems []string
+	cfg.SimDrivers = requirePositive(getenv, "SIM_DRIVERS", &problems)
+	cfg.SimLapMeanMs = requirePositive(getenv, "SIM_LAP_MEAN_MS", &problems)
+	cfg.SimLapStddevMs = requireNonNegative(getenv, "SIM_LAP_STDDEV_MS", &problems)
+	cfg.SimSessionLaps = requirePositive(getenv, "SIM_SESSION_LAPS", &problems)
+	if len(problems) > 0 {
+		return fmt.Errorf("simulator is enabled but its config is invalid: %s", strings.Join(problems, "; "))
+	}
+
+	// Optional, correctness-neutral pacing knobs (defaults allowed).
+	tick, err := intEnv(getenv, "SIM_TICK_MS", 250)
+	if err != nil {
+		return err
+	}
+	if tick < 0 {
+		return fmt.Errorf("SIM_TICK_MS must be >= 0, got %d", tick)
+	}
+	cfg.SimTickMs = tick
+
+	gap, err := intEnv(getenv, "SIM_SESSION_GAP_MS", 5000)
+	if err != nil {
+		return err
+	}
+	if gap < 0 {
+		return fmt.Errorf("SIM_SESSION_GAP_MS must be >= 0, got %d", gap)
+	}
+	cfg.SimSessionGapMs = gap
+
+	if raw := strings.TrimSpace(getenv("SIM_SEED")); raw != "" {
+		seed, perr := strconv.ParseInt(raw, 10, 64)
+		if perr != nil {
+			return fmt.Errorf("SIM_SEED must be an integer, got %q", raw)
+		}
+		cfg.SimSeed = seed
+		cfg.SimSeedSet = true
+	}
+	return nil
+}
+
+// requirePositive reads an int env that must be present and >= 1; otherwise it
+// appends a clear problem string (and returns 0). It never assumes a default.
+func requirePositive(getenv func(string) string, key string, problems *[]string) int {
+	return requireBounded(getenv, key, 1, problems)
+}
+
+// requireNonNegative reads an int env that must be present and >= 0.
+func requireNonNegative(getenv func(string) string, key string, problems *[]string) int {
+	return requireBounded(getenv, key, 0, problems)
+}
+
+func requireBounded(getenv func(string) string, key string, min int, problems *[]string) int {
+	raw := strings.TrimSpace(getenv(key))
+	if raw == "" {
+		*problems = append(*problems, key+" is required when the simulator is enabled")
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		*problems = append(*problems, fmt.Sprintf("%s must be an integer, got %q", key, raw))
+		return 0
+	}
+	if n < min {
+		*problems = append(*problems, fmt.Sprintf("%s must be >= %d, got %d", key, min, n))
+		return 0
+	}
+	return n
+}
+
+// boolEnv parses a strict boolean (true/false/1/0, case-insensitive). An empty
+// value yields def; anything else is an error (never silently coerced).
+func boolEnv(getenv func(string) string, key string, def bool) (bool, error) {
+	raw := strings.TrimSpace(getenv(key))
+	if raw == "" {
+		return def, nil
+	}
+	switch strings.ToLower(raw) {
+	case "true", "1":
+		return true, nil
+	case "false", "0":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be a boolean (true/false), got %q", key, raw)
+	}
 }
 
 // AMQPURI builds the broker connection string. It is intentionally NOT logged:
