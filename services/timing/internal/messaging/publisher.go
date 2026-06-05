@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -46,6 +47,62 @@ func (p *Publisher) Publish(ctx context.Context, routingKey string, body []byte)
 		DeliveryMode: amqp.Persistent,
 		Body:         body,
 	})
+}
+
+// OpenConfirmChannel opens a SECOND channel on the same connection, in publisher
+// confirm mode, for the outbox relay (Story 1.4). It is separate from the
+// heartbeat channel so the ephemeral fire-and-forget heartbeat path is never
+// coupled to confirms. The caller must Close it (before the Publisher) on
+// shutdown.
+func (p *Publisher) OpenConfirmChannel() (*ConfirmChannel, error) {
+	ch, err := p.conn.Channel()
+	if err != nil {
+		return nil, err
+	}
+	if err := ch.Confirm(false); err != nil {
+		_ = ch.Close()
+		return nil, err
+	}
+	return &ConfirmChannel{ch: ch, exchange: p.exchange}, nil
+}
+
+// ConfirmChannel publishes persistent messages to the owned exchange and waits
+// for the broker's publisher-confirm ack. A nil error from PublishConfirmed means
+// the broker durably accepted the message — only then may the relay mark the
+// outbox row sent (AC1: sent only after ack).
+type ConfirmChannel struct {
+	ch       *amqp.Channel
+	exchange string
+}
+
+// PublishConfirmed publishes body to routingKey and blocks until the broker acks
+// (or nacks, or ctx expires). A nack or timeout is a publish failure — the row
+// stays pending and is retried; it is NEVER reported as a false success.
+func (c *ConfirmChannel) PublishConfirmed(ctx context.Context, routingKey string, body []byte) error {
+	dc, err := c.ch.PublishWithDeferredConfirmWithContext(ctx, c.exchange, routingKey, false, false, amqp.Publishing{
+		ContentType:  "application/json",
+		DeliveryMode: amqp.Persistent,
+		Body:         body,
+	})
+	if err != nil {
+		return err
+	}
+	acked, err := dc.WaitContext(ctx)
+	if err != nil {
+		return err
+	}
+	if !acked {
+		return errors.New("publish nacked by broker")
+	}
+	return nil
+}
+
+// Close closes the confirm channel.
+func (c *ConfirmChannel) Close() error {
+	if c.ch != nil {
+		return c.ch.Close()
+	}
+	return nil
 }
 
 // Close shuts the channel then the connection, in that order.

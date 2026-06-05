@@ -51,6 +51,36 @@ func TestLoad_AppliesDocumentedDefaults(t *testing.T) {
 	if cfg.ShutdownTimeout != 5000 {
 		t.Errorf("ShutdownTimeout default = %d, want 5000", cfg.ShutdownTimeout)
 	}
+	if cfg.DBPath != "/data/timing.db" {
+		t.Errorf("DBPath default = %q, want /data/timing.db", cfg.DBPath)
+	}
+	if cfg.OutboxPollInterval != 200 {
+		t.Errorf("OutboxPollInterval default = %d, want 200", cfg.OutboxPollInterval)
+	}
+}
+
+func TestLoad_OverridesOutboxKnobs(t *testing.T) {
+	env := validEnv()
+	env["DB_PATH"] = "/tmp/custom.db"
+	env["OUTBOX_POLL_INTERVAL_MS"] = "50"
+	cfg, err := Load(envFrom(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.DBPath != "/tmp/custom.db" {
+		t.Errorf("DBPath = %q, want the overridden /tmp/custom.db", cfg.DBPath)
+	}
+	if cfg.OutboxPollInterval != 50 {
+		t.Errorf("OutboxPollInterval = %d, want 50", cfg.OutboxPollInterval)
+	}
+}
+
+func TestLoad_RejectsNonPositiveOutboxInterval(t *testing.T) {
+	env := validEnv()
+	env["OUTBOX_POLL_INTERVAL_MS"] = "0"
+	if _, err := Load(envFrom(env)); err == nil {
+		t.Fatal("expected an error for a non-positive OUTBOX_POLL_INTERVAL_MS")
+	}
 }
 
 func TestLoad_RejectsNonIntInterval(t *testing.T) {

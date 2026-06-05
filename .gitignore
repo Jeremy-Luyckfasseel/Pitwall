@@ -22,6 +22,10 @@ obj/
 # Logs & local data
 *.log
 data/
+# Local SQLite databases (private per-service stores; WAL/SHM sidecars) — never committed
+*.db
+*.db-wal
+*.db-shm
 
 # BMAD
 _bmad/

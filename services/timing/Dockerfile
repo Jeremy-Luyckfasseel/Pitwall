@@ -27,8 +27,15 @@ COPY --from=build /out/timing /usr/local/bin/timing
 COPY services/timing/healthcheck.sh /usr/local/bin/healthcheck.sh
 RUN chmod +x /usr/local/bin/healthcheck.sh
 
+# Private SQLite store (Story 1.4). Owned by the non-root runtime user so the
+# service can create the DB on the mounted volume. The compose timing-data
+# volume mounts over /data and keeps the data across restarts.
+RUN mkdir -p /data && chown pitwall:pitwall /data
+VOLUME ["/data"]
+
 ENV CONTRACT_DIR=/contract \
-    LIVENESS_FILE=/tmp/pitwall-timing.live
+    LIVENESS_FILE=/tmp/pitwall-timing.live \
+    DB_PATH=/data/timing.db
 
 USER pitwall
 
