@@ -1,10 +1,12 @@
 # Timing
 
 The lap-timing service (Go). This directory holds the **Go service skeleton on the
-bus** (Story 1.3) plus the **transactional outbox + relay reliability spine**
-(Story 1.4) — the inline blueprint blocks every Pitwall Go service is built from.
-Timing's domain (laps, sessions, the simulator) is added in Stories 1.5–1.8; the
-blueprint machinery here is **extracted** to `libs/go-pitwall` in Epic 2
+bus** (Story 1.3), the **transactional outbox + relay reliability spine**
+(Story 1.4), and the **development simulator** (Story 1.5) — the inline blueprint
+blocks every Pitwall Go service is built from. The remaining Timing domain
+(min-lap-time validity filter, session lifecycle/out-of-order tolerance, scanner
+offline, PR detection) arrives in Stories 1.6–1.8 + Epic 3; the blueprint
+machinery here is **extracted** to `libs/go-pitwall` in Epic 2
 (grow-don't-pre-scaffold).
 
 ## What it owns (today)
@@ -29,19 +31,34 @@ blueprint machinery here is **extracted** to `libs/go-pitwall` in Epic 2
 - Maintains a **liveness touch-file** the Docker `healthcheck` reads.
 - Logs **structured JSON** (one correlationId per process lifecycle) and shuts down
   **gracefully** on SIGTERM/SIGINT, with a bounded best-effort **outbox flush**.
+- An **env-toggled simulator** (Story 1.5 — `SIMULATOR_ENABLED`, **off** in code,
+  **on** in the local compose demo). When on it runs **continuous sessions** for
+  **N fixture drivers**, streaming `session.started → lap.recorded → session.ended`
+  through the outbox so the platform runs end-to-end with **no hardware** (FR40).
+  Each driver's first crossing is the **out-lap (start marker, uncounted)**; each
+  subsequent crossing emits a lap with `lapTimeMs` = delta from the previous
+  crossing. Lap times are drawn from a configurable normal distribution; a
+  `SIM_SEED` makes a session reproducible.
 
-> The outbox is the seam Story 1.5's simulator plugs `lap.recorded`/`session.*`
-> into via `relay.EnqueueEnvelope(tx, store, env)`. The **event store + replay**
-> (ADR-0005) land with the producers/reconverge work (Stories 1.5/1.10), not here.
+> **Fixture masterIds are NOT an identity path.** The simulator mints N valid-format
+> UUID-v4 ids locally for its drivers; real Identity-issued ids replace them in
+> Epic 2. No id-minting path is baked into the skeleton.
+>
+> The producer seam is `relay.NewEnqueuer(db, store, validate, relay)` (commits the
+> outbox row in its own tx, then kicks the relay). The **minimum-lap-time bounce
+> filter** (Story 1.6), **session lifecycle / out-of-order tolerance** (1.8), and the
+> **event store + replay** (ADR-0005, Stories 1.10) are deliberately not here.
 
 ## Events
 
 | Direction | Event | Exchange / routing key | Notes |
 |---|---|---|---|
 | out | `control.heartbeat` | `timing.events` / `control.heartbeat` | cross-cutting liveness; payload `service`, `at`, `instanceId` (Q&A Round 25) |
+| out | `session.started` | `timing.events` / `session.started` | ACTUAL session start (simulator-generated); operator-driven path is Epic 11 |
+| out | `lap.recorded` | `timing.events` / `lap.recorded` | one per counted lap; `lapTimeMs` = delta from previous valid crossing |
+| out | `session.ended` | `timing.events` / `session.ended` | carries a minimal per-driver `summary` (tolerant/unpinned v1) |
 
-Consumes nothing yet (the idempotent inbox + lap/session events arrive in later
-Epic-1 stories).
+Consumes nothing yet (the idempotent inbox arrives in later Epic-1 stories).
 
 ## Run
 
@@ -49,8 +66,11 @@ Epic-1 stories).
 # whole stack (from repo root): brings up RabbitMQ then Timing, waits for health
 make up            # or: docker compose up -d
 
-docker compose logs -f timing          # watch the structured JSON heartbeat lifecycle
+# Simulator is ON by default in compose — watch a live lap stream:
+docker compose logs -f timing          # session.started -> lap.recorded... -> session.ended (+ heartbeats)
 docker compose stop timing             # SIGTERM -> graceful drain -> clean exit 0
+
+# Heartbeat-only (no simulator): set SIMULATOR_ENABLED=false in .env.
 ```
 
 ## Tests
@@ -83,19 +103,33 @@ go test -tags=integration ./test/integration/...# real RabbitMQ via testcontaine
 | `DB_PATH` | `/data/timing.db` | private SQLite DB (on the `timing-data` volume) |
 | `OUTBOX_POLL_INTERVAL_MS` | `200` | relay poll backstop (enqueue also kicks the relay) |
 | `INSTANCE_ID` | *(minted)* | per-process id; a UUID is generated if unset |
+| `SIMULATOR_ENABLED` | `false` (code) / `true` (compose) | toggle the simulator; `true\|false\|1\|0` |
+| `SIM_DRIVERS` | *(required when on)* | N fixture drivers (≥ 1) |
+| `SIM_LAP_MEAN_MS` | *(required when on)* | normal-distribution mean lap time (ms, ≥ 1) |
+| `SIM_LAP_STDDEV_MS` | *(required when on)* | normal-distribution stddev (ms, ≥ 0) |
+| `SIM_SESSION_LAPS` | *(required when on)* | counted laps per driver before the session ends (≥ 1) |
+| `SIM_TICK_MS` | `250` | wall-clock pacing between emitted events |
+| `SIM_SESSION_GAP_MS` | `5000` | pause between sessions in the continuous loop |
+| `SIM_SEED` | *(time-seeded)* | optional integer for a reproducible session |
+
+When `SIMULATOR_ENABLED` is on, the four **required** knobs above must be set or the
+service **fails fast** at startup naming each missing/invalid one (golden rule — never
+assumed). The pacing knobs are correctness-neutral and default.
 
 ## Layout
 
 ```
-cmd/timing/main.go            # wiring + graceful shutdown + real outbox flush
-internal/config/             # env loading + fail-fast validation
+cmd/timing/main.go            # wiring + graceful shutdown + real outbox flush + simulator goroutine
+internal/config/             # env loading + fail-fast validation (incl. simulator knobs)
 internal/logging/            # the single structured-JSON logger
-internal/messaging/          # envelope, validate-on-publish (+ data-schema index), exchange,
-                             #   publisher + confirm-mode channel
+internal/messaging/          # envelope + domain-event builders, validate-on-publish (+ data-schema
+                             #   index), exchange, publisher + confirm-mode channel
 internal/persistence/        # SQLite open + pragmas, goose migrations, the outbox store
-internal/relay/              # the outbox relay loop + EnqueueEnvelope producer seam
+internal/relay/              # the outbox relay loop + EnqueueEnvelope / NewEnqueuer producer seam
+internal/domain/             # pure crossing -> lap rule (start marker, per-driver delta/lapNumber)
+internal/simulator/          # the env-toggled simulator: drivers, distribution, session lifecycle
 internal/heartbeat/          # 1 s emitter + liveness touch-file
 internal/hygiene/            # source guard test (no bare prints)
-test/integration/            # testcontainers RabbitMQ end-to-end (heartbeat + outbox)
+test/integration/            # testcontainers RabbitMQ end-to-end (heartbeat + outbox + simulator stream)
 Dockerfile · healthcheck.sh  # multi-stage build (context = repo root); bus-only health
 ```

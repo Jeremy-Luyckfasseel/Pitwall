@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -41,4 +42,29 @@ func EnqueueEnvelope(tx *sql.Tx, store *persistence.OutboxStore, validate func([
 		Payload:    payload,
 		CreatedAt:  env.OccurredAt,
 	})
+}
+
+// Kicker is signalled after a successful enqueue so the relay publishes the
+// fresh row promptly instead of waiting a full poll interval. *relay.Relay
+// satisfies it via Kick().
+type Kicker interface {
+	Kick()
+}
+
+// NewEnqueuer returns the production producer seam: a single call that commits
+// one outbox row in its own transaction (atomic with any domain write the same
+// tx makes) and then kicks the relay for prompt publication. This is what the
+// Story-1.5 simulator — and every future domain producer — calls to publish
+// durably through the outbox. A failed enqueue (incl. an enqueue-time validation
+// rejection) returns the error and does NOT kick.
+func NewEnqueuer(db *sql.DB, store *persistence.OutboxStore, validate func([]byte) error, kicker Kicker) func(context.Context, messaging.Envelope) error {
+	return func(ctx context.Context, env messaging.Envelope) error {
+		if err := persistence.WithinTx(ctx, db, func(tx *sql.Tx) error {
+			return EnqueueEnvelope(tx, store, validate, env)
+		}); err != nil {
+			return err
+		}
+		kicker.Kick()
+		return nil
+	}
 }

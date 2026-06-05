@@ -99,3 +99,73 @@ var errInvalid = stringError("invalid for test")
 type stringError string
 
 func (e stringError) Error() string { return string(e) }
+
+// countingKicker records how many times the relay was kicked.
+type countingKicker struct{ kicks int }
+
+func (k *countingKicker) Kick() { k.kicks++ }
+
+// NewEnqueuer is the production producer seam (Story 1.5): a single call commits
+// the outbox row in its own tx and kicks the relay. It is what the simulator and
+// every future domain producer call to publish durably.
+func TestNewEnqueuer_CommitsRowAndKicks(t *testing.T) {
+	ctx := context.Background()
+	db, err := persistence.Open(ctx, filepath.Join(t.TempDir(), "timing.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	store := persistence.NewOutboxStore(db)
+	kicker := &countingKicker{}
+
+	enqueue := NewEnqueuer(db, store, nil, kicker)
+	env := messaging.Envelope{
+		ID:              "9f1c2b4e-7a3d-4c8e-bf21-5d0a6e2f1a90",
+		Type:            "lap.recorded",
+		Source:          "timing",
+		SchemaVersion:   1,
+		EnvelopeVersion: 1,
+		OccurredAt:      messaging.FormatWireTime(time.Unix(0, 0)),
+		CorrelationID:   "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
+		CausationID:     nil,
+		Data:            map[string]any{"masterId": "x"},
+	}
+	if err := enqueue(ctx, env); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	pending, err := store.FetchPending(ctx, 10)
+	if err != nil {
+		t.Fatalf("FetchPending: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending = %d, want 1", len(pending))
+	}
+	if kicker.kicks != 1 {
+		t.Errorf("relay kicks = %d, want 1 (prompt publish)", kicker.kicks)
+	}
+}
+
+// A validator rejection propagates and leaves no row (fail fast at enqueue, no kick).
+func TestNewEnqueuer_RejectsInvalidNoRowNoKick(t *testing.T) {
+	ctx := context.Background()
+	db, err := persistence.Open(ctx, filepath.Join(t.TempDir(), "timing.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	store := persistence.NewOutboxStore(db)
+	kicker := &countingKicker{}
+
+	enqueue := NewEnqueuer(db, store, func([]byte) error { return errInvalid }, kicker)
+	if err := enqueue(ctx, messaging.Envelope{ID: "x", Type: "lap.recorded"}); err == nil {
+		t.Fatal("expected rejection of an invalid envelope")
+	}
+	pending, _ := store.FetchPending(ctx, 10)
+	if len(pending) != 0 {
+		t.Errorf("invalid envelope left %d rows; want 0", len(pending))
+	}
+	if kicker.kicks != 0 {
+		t.Errorf("relay kicked %d times on a rejected enqueue; want 0", kicker.kicks)
+	}
+}

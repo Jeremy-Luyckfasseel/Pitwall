@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
@@ -22,6 +23,7 @@ import (
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/messaging"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/persistence"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/relay"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/simulator"
 )
 
 func main() {
@@ -110,6 +112,30 @@ func run() int {
 		Log:      log,
 	})
 
+	// The producer seam: durably enqueue an event (own tx) + kick the relay.
+	enqueue := relay.NewEnqueuer(db, outbox, validator.ValidateEnvelopeBytes, outboxRelay)
+
+	// Simulator (Story 1.5): env-toggled, OFF by default. When on, it generates
+	// continuous sessions of laps for N fixture drivers through the outbox.
+	var sim *simulator.Simulator
+	if cfg.SimulatorEnabled {
+		sim = simulator.New(simulator.Config{
+			Drivers:     cfg.SimDrivers,
+			LapMeanMs:   cfg.SimLapMeanMs,
+			LapStddevMs: cfg.SimLapStddevMs,
+			SessionLaps: cfg.SimSessionLaps,
+			Tick:        time.Duration(cfg.SimTickMs) * time.Millisecond,
+			SessionGap:  time.Duration(cfg.SimSessionGapMs) * time.Millisecond,
+			Source:      cfg.ServiceName,
+			Rng:         seedRNG(cfg),
+			Now:         time.Now,
+			Enqueue:     enqueue,
+			Log:         log,
+		})
+		log.Info("simulator enabled", "drivers", cfg.SimDrivers, "sessionLaps", cfg.SimSessionLaps,
+			"lapMeanMs", cfg.SimLapMeanMs, "lapStddevMs", cfg.SimLapStddevMs)
+	}
+
 	// Run until SIGTERM/SIGINT.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -124,15 +150,28 @@ func run() int {
 		_ = outboxRelay.Run(ctx)
 		close(relayDone)
 	}()
+	var simDone chan struct{}
+	if sim != nil {
+		simDone = make(chan struct{})
+		go func() {
+			if err := sim.Run(ctx); err != nil {
+				log.Error("simulator stopped with error", "error", err.Error())
+			}
+			close(simDone)
+		}()
+	}
 
 	<-ctx.Done()
 	log.Info("shutdown signal received; draining")
 
-	// Graceful shutdown (NFR19): wait for the heartbeat + relay loops to stop
+	// Graceful shutdown (NFR19): stop the simulator + heartbeat + relay loops
 	// (bounded), make a best-effort final outbox flush, then close cleanly.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(),
 		time.Duration(cfg.ShutdownTimeout)*time.Millisecond)
 	defer cancel()
+	if simDone != nil {
+		waitFor(shutdownCtx, log, "simulator loop", simDone)
+	}
 	waitFor(shutdownCtx, log, "heartbeat loop", loopDone)
 	waitFor(shutdownCtx, log, "relay loop", relayDone)
 
@@ -164,4 +203,13 @@ func waitFor(ctx context.Context, log *slog.Logger, what string, done <-chan str
 func flushOutbox(ctx context.Context, log *slog.Logger, r *relay.Relay) {
 	sent, remaining := r.Flush(ctx)
 	log.Info("outbox flush complete", "flushed", sent, "pending", remaining)
+}
+
+// seedRNG builds the simulator's RNG: deterministic when SIM_SEED is set
+// (reproducible demos), otherwise time-seeded.
+func seedRNG(cfg *config.Config) *rand.Rand {
+	if cfg.SimSeedSet {
+		return rand.New(rand.NewSource(cfg.SimSeed))
+	}
+	return rand.New(rand.NewSource(time.Now().UnixNano()))
 }
