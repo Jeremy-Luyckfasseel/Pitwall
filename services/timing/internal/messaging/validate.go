@@ -4,19 +4,24 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// Validator validates outgoing messages against the /contract JSON Schemas
-// (blueprint §Messaging: validate every message in and out). It compiles the
-// envelope schema + the heartbeat data schema once at startup; a message that
-// fails is logged + dropped by the caller, never published (AC1).
+// Validator validates messages against the /contract JSON Schemas (blueprint
+// §Messaging: validate every message in and out). It compiles the envelope
+// schema, the heartbeat data schema, and an index of every event data schema
+// keyed by its wire `type`, once at startup. A message that fails is logged +
+// dropped/quarantined by the caller, never published (AC1/AC2).
 type Validator struct {
 	envelope  *jsonschema.Schema
 	heartbeat *jsonschema.Schema
+	data      map[string]*jsonschema.Schema // wire type -> data-payload schema
 }
 
 // ResolveContractDir returns the directory holding the /contract tree. It honors
@@ -54,7 +59,44 @@ func NewValidator(contractDir string) (*Validator, error) {
 	if err != nil {
 		return nil, fmt.Errorf("compile heartbeat schema: %w", err)
 	}
-	return &Validator{envelope: envSchema, heartbeat: hbSchema}, nil
+	data, err := indexDataSchemas(filepath.Join(contractDir, "schemas"))
+	if err != nil {
+		return nil, fmt.Errorf("index data schemas: %w", err)
+	}
+	return &Validator{envelope: envSchema, heartbeat: hbSchema, data: data}, nil
+}
+
+// schemaStem matches the trailing version segment of a schema filename stem,
+// e.g. "lap.recorded.v1" -> type "lap.recorded".
+var schemaVersionSuffix = regexp.MustCompile(`\.v\d+$`)
+
+// indexDataSchemas compiles every event data schema under schemasDir, keyed by
+// its wire `type`. The key is the filename stem minus the trailing `.vN` — the
+// same example->schema stem mapping the Python contract gates use, so the
+// "control.heartbeat.v1" / "lap.recorded.v1" naming inconsistency is handled
+// uniformly. The envelope meta-schema is skipped (it is not a data payload).
+func indexDataSchemas(schemasDir string) (map[string]*jsonschema.Schema, error) {
+	out := map[string]*jsonschema.Schema{}
+	err := filepath.WalkDir(schemasDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".schema.json") || d.Name() == "envelope.schema.json" {
+			return nil
+		}
+		stem := strings.TrimSuffix(d.Name(), ".schema.json")
+		typ := schemaVersionSuffix.ReplaceAllString(stem, "")
+		s, cerr := compile(path)
+		if cerr != nil {
+			return fmt.Errorf("compile %s: %w", path, cerr)
+		}
+		out[typ] = s
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ValidateHeartbeat validates the full envelope against the envelope schema and
@@ -72,6 +114,34 @@ func (v *Validator) ValidateHeartbeat(env Envelope) error {
 		return fmt.Errorf("envelope did not marshal to a JSON object")
 	}
 	if err := v.heartbeat.Validate(m["data"]); err != nil {
+		return fmt.Errorf("data: %w", err)
+	}
+	return nil
+}
+
+// ValidateEnvelopeBytes validates a marshalled outbox payload: the full envelope
+// against the envelope schema, then its data against the schema registered for
+// the envelope's `type`. It fails closed — an unknown type (no registered data
+// schema) is an error, because the relay must never publish an event it cannot
+// validate (AC2). A non-nil error means: do not publish; quarantine the row.
+func (v *Validator) ValidateEnvelopeBytes(payload []byte) error {
+	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("payload is not valid JSON: %w", err)
+	}
+	if err := v.envelope.Validate(inst); err != nil {
+		return fmt.Errorf("envelope: %w", err)
+	}
+	m, ok := inst.(map[string]any)
+	if !ok {
+		return fmt.Errorf("envelope did not marshal to a JSON object")
+	}
+	typ, _ := m["type"].(string)
+	ds, ok := v.data[typ]
+	if !ok {
+		return fmt.Errorf("no /contract data schema for type %q", typ)
+	}
+	if err := ds.Validate(m["data"]); err != nil {
 		return fmt.Errorf("data: %w", err)
 	}
 	return nil

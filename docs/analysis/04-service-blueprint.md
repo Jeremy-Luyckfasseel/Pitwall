@@ -18,9 +18,13 @@
 
 ### Reliability
 - [ ] **Outbox**: state change + outgoing event committed in one local transaction; a
-      relay publishes to RabbitMQ and retries until reachable (survives bus-down).
+      relay publishes to RabbitMQ and retries until reachable (survives bus-down). The relay
+      **validates on publish**; an event that fails its own `/contract` validation is set to the
+      terminal **`quarantined`** outbox status (`pending`/`sent`/`quarantined`) — never published,
+      never retried. This **producer-side quarantine** is a local DB status, **not** the
+      consumer-side RabbitMQ DLQ below; **every service uses this exact `quarantined` name**.
 - [ ] **Idempotent inbox**: dedupes by message `id`; reprocessing is a no-op.
-- [ ] **Dead-letter queue** + retry/backoff for poison messages.
+- [ ] **Dead-letter queue** (consumer side) + retry/backoff → parking for poison *inbound* messages.
 - [ ] **Event-store/replay**: records its last-processed marker; on restart it catches
       up by replaying past that marker.
 - [ ] Keeps its **own local copy** (read-model) of any peer data it needs (ECST) — no
