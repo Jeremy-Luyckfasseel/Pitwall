@@ -1,0 +1,23 @@
+{
+  "name": "pitwall-leaderboard-board",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Trackside live-standings board (Vite + React SPA) embedded into the Leaderboard Go service and pushed over SSE. Story 1.7.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.0",
+    "@types/react-dom": "19.2.0",
+    "@vitejs/plugin-react": "5.0.4",
+    "typescript": "5.9.3",
+    "vite": "7.1.12"
+  }
+}

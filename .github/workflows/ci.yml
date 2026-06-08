@@ -115,6 +115,34 @@ jobs:
       - name: Integration tests (real RabbitMQ via testcontainers)
         run: go test -tags=integration -timeout 300s ./test/integration/...
 
+  leaderboard-go:
+    # The Leaderboard Go consumer service (Story 1.7). Build + vet + unit tests always;
+    # the integration test stands up a REAL RabbitMQ via testcontainers. No Node step is
+    # needed: //go:embed all:dist resolves against the committed dist/.gitkeep placeholder,
+    # so the Go gate tests the SSE/render/consume logic independently of the frontend build
+    # (the real Vite bundle is built in the Docker image's node stage). Triggered by
+    # services/** and the contract/** fan-out (re-tests validate-on-consume).
+    needs: changes
+    if: ${{ needs.changes.outputs.services == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/leaderboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+          cache-dependency-path: services/leaderboard/go.sum
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Unit tests
+        run: go test ./...
+      - name: Integration tests (real RabbitMQ via testcontainers)
+        run: go test -tags=integration -timeout 300s ./test/integration/...
+
   conventional-commits:
     # Conventional Commits gate the squash merge; enforce on PRs (the PR commits / title).
     if: github.event_name == 'pull_request'
