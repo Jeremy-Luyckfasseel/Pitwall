@@ -7,6 +7,15 @@
 node_modules/
 dist/
 build/
+
+# Exception: keep the Leaderboard SPA embed target present so `//go:embed all:dist`
+# and `go build` compile WITHOUT a prior Vite build (CI's Go-only job, local Go work).
+# The real bundle is produced by the Vite build (Docker node stage) and stays ignored;
+# only the .gitkeep placeholder is tracked. (Re-include the dir, then ignore its
+# contents, then keep the placeholder — gitignore's parent-directory rule.)
+!/services/leaderboard/internal/web/dist/
+/services/leaderboard/internal/web/dist/*
+!/services/leaderboard/internal/web/dist/.gitkeep
 __pycache__/
 *.pyc
 bin/
