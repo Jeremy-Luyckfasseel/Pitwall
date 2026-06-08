@@ -1034,3 +1034,52 @@ A: **`services/timing/`.** The architecture builds the blueprint machinery **inl
 first service to come alive and Stories **1.5** (simulator), **1.6** (lap-validity) and **1.8** (session
 lifecycle) build **directly** on this skeleton — so hosting it in `services/timing/` throws nothing away
 (grow-don't-pre-scaffold, AR15) rather than building a disposable template service.
+
+## Round 26 — Leaderboard consumer + live trackside board (2026-06-08)
+
+> Decided during the build phase (Epic 1, **Story 1.7** — the first *consumer* service, the first
+> non-Timing Go service, with a live web display). Three decisions were genuinely unpinned in the
+> existing docs and surfaced while creating the story; per the golden rule they are answered here
+> before building. Q26.3 **touches `/contract`** (it decides *not* to add a `driver` schema yet, and
+> why). No new ADR — none changes an architectural rule; they resolve under-specified build choices
+> within the existing blueprint (ECST read-model, bus-only liveness, grow-don't-pre-scaffold).
+
+**Q26.1 — Live transport for the trackside board: WebSockets or SSE?**
+A: **SSE (Server-Sent Events).** Every doc to date wrote the choice as "websockets/SSE"
+([01](01-architecture-overview.md), [Round 9 line ~253], architecture §UI) without picking one. The
+board is **read-only and one-way** — the Go service pushes standings; the browser never sends a domain
+message back — which is exactly SSE's shape. SSE rides plain HTTP (no upgrade handshake), and the
+browser `EventSource` gives **built-in auto-reconnect**, which directly serves the Story-1.10
+stale/reconnect requirement (FR47). It is trivial to serve from Go's `net/http` alongside the
+`//go:embed`-ed Vite/React bundle on the **same port**. This is **not** an HTTP `/health` endpoint and
+**not** HTTP polling — it satisfies ADR-0004 (bus-only liveness; live UI via push, never polling). A
+future bidirectional surface (e.g. Control Room controls) may still choose WebSockets independently;
+this decision is scoped to the read-only Leaderboard display.
+
+**Q26.2 — How is the Leaderboard read-model + idempotent inbox stored in Story 1.7?**
+A: **Durable SQLite, mirroring Timing's `persistence/` package** (modernc pure-Go driver, goose
+migrations) — a durable **inbox** table (dedupe on the envelope `id`, M6) and a **standings projection**
+table. The blueprint lists `persistence/` (private DB + inbox table) as a mandatory part and mandates
+**database-per-service** (SQLite everywhere except Billing); building it durable now keeps Leaderboard
+consistent with Timing and sets up **Story 1.8** (session keying/reset) and **Story 1.10** (last-processed
+marker + replay/reconverge) cleanly, rather than shipping an in-memory model in 1.7 and then introducing
+the whole persistence package + a redeclare in 1.10. FR41's "pure read-model rebuilt from events" is
+honored: the projection owns **no canonical state** — it is a fold of consumed events and is fully
+rebuildable. *(Scope note: the last-processed **marker** and event **replay** themselves are Story 1.10;
+1.7 just persists the inbox + projection so they survive a process restart.)*
+
+**Q26.3 — How far does Story 1.7 go on `driver.profile_updated` nicknames?**
+A: **Defer the wiring; build tolerant.** AC3 (FR46) requires display names to update "when a
+`driver.profile_updated` nickname later arrives — *tolerant of the producer not existing yet*." There is
+**no `driver` namespace in `/contract`** and **no Driver service until Epic 3** (Story 3.2), and in Epic 1
+the only identifier on `lap.recorded` is `masterId` (racing numbers also do not exist until Driver/Identity
+in Epic 2/3). So Story 1.7: (a) renders the fallback display name = a **short `masterId`** (the only
+identifier available); (b) **keys each standings row on `masterId`** and treats the display name as a
+separate **overlay field**, so a nickname can be applied in place later without disturbing the row's
+identity or its lap data; and (c) does **NOT** add a `contract/schemas/driver/*` schema or a
+`driver.profile_updated` consumer binding — those land in **Epic 3** when the Driver service owns and
+produces that event. This honors the no-invented-schema rule (golden rule + the Story-1.6 precedent:
+*don't define another service's wire contract ahead of its owner; flag the gap instead*). The board works
+correctly with no nicknames; the overlay seam is designed but unwired. *(`session.started`/`session.ended`
+consumption — auto-reset and active/finished status, FR43/FR45 — are likewise **out of 1.7 scope**, owned
+by Story 1.8; 1.7 accumulates a single best-lap-per-driver board from `lap.recorded` only.)*
