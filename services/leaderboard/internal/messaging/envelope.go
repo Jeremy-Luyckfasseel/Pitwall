@@ -28,6 +28,14 @@ const HeartbeatRoutingKey = "control.heartbeat"
 // /contract data schema lives at contract/schemas/timing/lap.recorded.v1.
 const LapRecordedRoutingKey = "lap.recorded"
 
+// SessionStartedRoutingKey / SessionEndedRoutingKey are the session lifecycle
+// events this service consumes (Story 1.8: auto-reset + active/finished status).
+// Their /contract data schemas live at contract/schemas/timing/session.*.v1.
+const (
+	SessionStartedRoutingKey = "session.started"
+	SessionEndedRoutingKey   = "session.ended"
+)
+
 // wireTimeLayout renders timestamps in the canonical wire format: RFC3339 UTC,
 // exactly 3-digit milliseconds, literal 'Z' (AR9).
 const wireTimeLayout = "2006-01-02T15:04:05.000Z07:00"
@@ -124,6 +132,42 @@ func DecodeLapRecorded(env IncomingEnvelope) (LapRecordedData, error) {
 	var d LapRecordedData
 	if err := json.Unmarshal(env.Data, &d); err != nil {
 		return LapRecordedData{}, fmt.Errorf("decode lap.recorded data: %w", err)
+	}
+	return d, nil
+}
+
+// SessionStartedData is the timing/session.started.v1 payload (tolerant reader:
+// only the fields the board needs).
+type SessionStartedData struct {
+	SessionID string `json:"sessionId"`
+	StartedAt string `json:"startedAt"`
+}
+
+// SessionEndedData is the timing/session.ended.v1 payload. It deliberately does
+// NOT decode summary[]: the per-item shape is intentionally unpinned in v1
+// (confirm-at-build when Driver/Mailing consume it — Epic 3/10), and the board's
+// finished standings come from its own projection.
+type SessionEndedData struct {
+	SessionID string `json:"sessionId"`
+	EndedAt   string `json:"endedAt"`
+}
+
+// DecodeSessionStarted extracts the session.started data payload from an
+// incoming envelope. The caller has already validated the bytes against /contract.
+func DecodeSessionStarted(env IncomingEnvelope) (SessionStartedData, error) {
+	var d SessionStartedData
+	if err := json.Unmarshal(env.Data, &d); err != nil {
+		return SessionStartedData{}, fmt.Errorf("decode session.started data: %w", err)
+	}
+	return d, nil
+}
+
+// DecodeSessionEnded extracts the session.ended data payload from an incoming
+// envelope. The caller has already validated the bytes against /contract.
+func DecodeSessionEnded(env IncomingEnvelope) (SessionEndedData, error) {
+	var d SessionEndedData
+	if err := json.Unmarshal(env.Data, &d); err != nil {
+		return SessionEndedData{}, fmt.Errorf("decode session.ended data: %w", err)
 	}
 	return d, nil
 }

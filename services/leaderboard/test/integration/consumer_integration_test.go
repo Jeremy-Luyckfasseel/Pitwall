@@ -91,7 +91,7 @@ func TestLeaderboardConsumesLapsEndToEnd(t *testing.T) {
 	if err := bus.DeclareConsumerQueue(messaging.ConsumerOptions{
 		SourceExchange: timingExchange,
 		QueueName:      "leaderboard.lap-recorded.it",
-		RoutingKey:     messaging.LapRecordedRoutingKey,
+		RoutingKeys:    []string{messaging.LapRecordedRoutingKey},
 		Prefetch:       16,
 	}); err != nil {
 		t.Fatalf("declare consumer queue: %v", err)

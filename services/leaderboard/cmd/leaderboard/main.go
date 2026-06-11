@@ -98,8 +98,12 @@ func run() int {
 	if err := bus.DeclareConsumerQueue(messaging.ConsumerOptions{
 		SourceExchange: cfg.TimingExchange,
 		QueueName:      consumeQueue,
-		RoutingKey:     messaging.LapRecordedRoutingKey,
-		Prefetch:       cfg.ConsumePrefetch,
+		RoutingKeys: []string{
+			messaging.LapRecordedRoutingKey,
+			messaging.SessionStartedRoutingKey,
+			messaging.SessionEndedRoutingKey,
+		},
+		Prefetch: cfg.ConsumePrefetch,
 	}); err != nil {
 		log.Error("failed to declare/bind the consumer queue", "error", err.Error())
 		_ = bus.Close()
@@ -112,7 +116,9 @@ func run() int {
 		return 1
 	}
 	log.Info("consuming", "queue", consumeQueue, "source", cfg.TimingExchange,
-		"routingKey", messaging.LapRecordedRoutingKey, "prefetch", cfg.ConsumePrefetch)
+		"routingKeys", []string{messaging.LapRecordedRoutingKey,
+			messaging.SessionStartedRoutingKey, messaging.SessionEndedRoutingKey},
+		"prefetch", cfg.ConsumePrefetch)
 
 	// The live board: serves the embedded SPA + pushes standings over SSE. The
 	// snapshot func reads the projection on demand (the board owns no state).
