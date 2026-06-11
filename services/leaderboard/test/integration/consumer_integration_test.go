@@ -62,11 +62,14 @@ func TestLeaderboardConsumesLapsEndToEnd(t *testing.T) {
 	store := persistence.NewStore(db)
 
 	snapshot := func() web.Snapshot {
-		bests, serr := store.AllBests(context.Background())
+		b, serr := store.CurrentBoard(context.Background())
 		if serr != nil {
-			t.Errorf("AllBests: %v", serr)
+			t.Errorf("CurrentBoard: %v", serr)
 		}
-		return web.ToSnapshot(bests)
+		if b == nil {
+			return web.ToSnapshot(nil)
+		}
+		return web.ToSnapshot(b.Bests)
 	}
 	server := web.NewServer(":0", snapshot, quietLog())
 
@@ -134,10 +137,14 @@ func TestLeaderboardConsumesLapsEndToEnd(t *testing.T) {
 	waitForApplied(t, applied, 3)
 
 	// --- assert the converged projection (dedupe + order + tie-break).
-	bests, err := store.AllBests(context.Background())
+	b, err := store.CurrentBoard(context.Background())
 	if err != nil {
-		t.Fatalf("AllBests: %v", err)
+		t.Fatalf("CurrentBoard: %v", err)
 	}
+	if b == nil {
+		t.Fatal("no current board after applied laps")
+	}
+	bests := b.Bests
 	if len(bests) != 2 {
 		t.Fatalf("standings has %d drivers, want 2 (the redelivered lap must not add one)", len(bests))
 	}

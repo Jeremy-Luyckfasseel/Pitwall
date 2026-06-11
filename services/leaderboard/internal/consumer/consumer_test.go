@@ -32,6 +32,19 @@ func (f *fakeDelivery) Nack(requeue bool) error {
 	return nil
 }
 
+// currentBests reads the current board's bests ([] when no session exists yet).
+func currentBests(t *testing.T, store *persistence.Store) []domain.DriverBest {
+	t.Helper()
+	b, err := store.CurrentBoard(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentBoard: %v", err)
+	}
+	if b == nil {
+		return nil
+	}
+	return b.Bests
+}
+
 func contractDir(t *testing.T) string {
 	t.Helper()
 	dir, err := messaging.ResolveContractDir("")
@@ -114,7 +127,7 @@ func TestProcess_ValidLap_AppliedAckedNotified(t *testing.T) {
 	if !d.acked || d.nacked {
 		t.Errorf("valid lap: acked=%v nacked=%v, want acked", d.acked, d.nacked)
 	}
-	bests, _ := store.AllBests(context.Background())
+	bests := currentBests(t, store)
 	if len(bests) != 1 || bests[0].BestLapMs != 42000 {
 		t.Errorf("standings = %+v, want one row @42000", bests)
 	}
@@ -136,7 +149,7 @@ func TestProcess_DuplicateID_NoOpButAcked(t *testing.T) {
 	if !d2.acked {
 		t.Error("a redelivered message must still be acked (dedupe no-op)")
 	}
-	bests, _ := store.AllBests(context.Background())
+	bests := currentBests(t, store)
 	if len(bests) != 1 {
 		t.Errorf("duplicate changed the read-model: %+v", bests)
 	}
@@ -160,7 +173,7 @@ func TestProcess_InvalidPayload_NotAppliedNackedNoRequeue(t *testing.T) {
 	if !d.nacked || d.requeue {
 		t.Errorf("invalid message: nacked=%v requeue=%v, want nacked with requeue=false", d.nacked, d.requeue)
 	}
-	bests, _ := store.AllBests(context.Background())
+	bests := currentBests(t, store)
 	if len(bests) != 0 {
 		t.Errorf("invalid message was applied to the read-model: %+v", bests)
 	}
@@ -181,7 +194,7 @@ func TestProcess_UnhandledType_IgnoredAndAcked(t *testing.T) {
 	if !d.acked || d.nacked {
 		t.Errorf("an unhandled type should be acked and ignored: acked=%v nacked=%v", d.acked, d.nacked)
 	}
-	bests, _ := store.AllBests(context.Background())
+	bests := currentBests(t, store)
 	if len(bests) != 0 {
 		t.Errorf("an unhandled type must not touch the read-model: %+v", bests)
 	}
@@ -200,7 +213,7 @@ func TestProcess_EqualBest_FirstSetRanksHigher(t *testing.T) {
 	h.Process(context.Background(), &fakeDelivery{body: lapEnvelope(
 		"bbbbbbbb-0000-7000-8000-000000000002", "bbbbbbbb-3e84-4d11-9aa2-7b6c5e4d3f21", 42000, "2026-06-08T10:00:09.000Z")})
 
-	bests, _ := store.AllBests(context.Background())
+	bests := currentBests(t, store)
 	ranked := domain.Rank(bests)
 	if len(ranked) != 2 || ranked[0].MasterID != "aaaaaaaa-3e84-4d11-9aa2-7b6c5e4d3f21" {
 		t.Errorf("first-to-set should rank higher; got %+v", ranked)

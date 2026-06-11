@@ -121,14 +121,18 @@ func run() int {
 		"prefetch", cfg.ConsumePrefetch)
 
 	// The live board: serves the embedded SPA + pushes standings over SSE. The
-	// snapshot func reads the projection on demand (the board owns no state).
+	// snapshot func reads the CURRENT session's board on demand (the board owns
+	// no state; the auto-reset IS this read switching to the newest session).
 	snapshot := func() web.Snapshot {
-		bests, serr := store.AllBests(context.Background())
+		b, serr := store.CurrentBoard(context.Background())
 		if serr != nil {
-			log.Error("failed to read standings for snapshot", "error", serr.Error())
+			log.Error("failed to read the current board for snapshot", "error", serr.Error())
 			return web.Snapshot{Rows: []web.RowView{}}
 		}
-		return web.ToSnapshot(bests)
+		if b == nil {
+			return web.ToSnapshot(nil) // no session ever seen: the waiting state
+		}
+		return web.ToSnapshot(b.Bests)
 	}
 	server := web.NewServer(cfg.HTTPAddr, snapshot, log)
 

@@ -19,7 +19,9 @@ import (
 // applier is the persistence surface the handler needs (satisfied by
 // *persistence.Store). Narrow interface keeps the consumer unit-testable.
 type applier interface {
-	Apply(ctx context.Context, envelopeID, eventType, processedAt string, lap domain.Lap) (applied bool, duplicate bool, err error)
+	ApplyLap(ctx context.Context, envelopeID, eventType, processedAt, sessionID string, lap domain.Lap) (applied bool, duplicate bool, err error)
+	ApplySessionStarted(ctx context.Context, envelopeID, eventType, processedAt, sessionID, startedAt string) (applied bool, duplicate bool, err error)
+	ApplySessionEnded(ctx context.Context, envelopeID, eventType, processedAt, sessionID, endedAt string) (applied bool, duplicate bool, err error)
 }
 
 // Handler processes one delivery at a time. A single Run goroutine drives it, so
@@ -96,7 +98,7 @@ func (h *Handler) Process(ctx context.Context, d messaging.Delivery) {
 		At:        data.At,
 		Seq:       h.seq.Add(1),
 	}
-	applied, duplicate, err := h.Store.Apply(ctx, env.ID, env.Type, h.now(), lap)
+	applied, duplicate, err := h.Store.ApplyLap(ctx, env.ID, env.Type, h.now(), data.SessionID, lap)
 	if err != nil {
 		// Transient (e.g. DB) failure: do NOT ack; requeue for another attempt.
 		h.Log.Error("failed to apply lap; requeueing", "error", err.Error(), "eventId", env.ID)
