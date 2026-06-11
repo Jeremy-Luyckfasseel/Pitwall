@@ -182,11 +182,12 @@ func TestProcess_InvalidPayload_NotAppliedNackedNoRequeue(t *testing.T) {
 	}
 }
 
-// Tolerant reader: a valid but unhandled event type (session.started) is ignored —
-// acked, not applied (1.7 consumes only lap.recorded; session.* is Story 1.8).
+// Tolerant reader: a valid but unhandled event type (a heartbeat) is ignored —
+// acked, not applied. (session.* is HANDLED since Story 1.8; the guard branch
+// still protects against future event types.)
 func TestProcess_UnhandledType_IgnoredAndAcked(t *testing.T) {
 	h, store, notify := newHandler(t)
-	other := fixture(t, contractDir(t), "examples/timing/session.started.v1.example.json")
+	other := fixture(t, contractDir(t), "examples/control/control.heartbeat.v1.example.json")
 	d := &fakeDelivery{body: other}
 
 	h.Process(context.Background(), d)
@@ -200,6 +201,116 @@ func TestProcess_UnhandledType_IgnoredAndAcked(t *testing.T) {
 	}
 	if *notify != 0 {
 		t.Error("an unhandled type must not notify")
+	}
+}
+
+// --- Story 1.8: session lifecycle routing (AC2 + AC3) ---
+
+// currentBoard reads the full current board state (nil when no session yet).
+func currentBoard(t *testing.T, store *persistence.Store) *persistence.Board {
+	t.Helper()
+	b, err := store.CurrentBoard(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentBoard: %v", err)
+	}
+	return b
+}
+
+// AC2: a session.started is validated, applied (board active), acked, and
+// NOTIFIES — a session flip is a board change even with no lap moved.
+func TestProcess_SessionStarted_AppliedAckedNotified(t *testing.T) {
+	h, store, notify := newHandler(t)
+	d := &fakeDelivery{body: fixture(t, contractDir(t), "examples/timing/session.started.v1.example.json")}
+
+	h.Process(context.Background(), d)
+
+	if !d.acked || d.nacked {
+		t.Errorf("session.started: acked=%v nacked=%v, want acked", d.acked, d.nacked)
+	}
+	b := currentBoard(t, store)
+	if b == nil || b.SessionID != "session-2026-05-31-evening-heat-3" || b.Status != persistence.StatusActive {
+		t.Errorf("board = %+v, want the example session active", b)
+	}
+	if *notify != 1 {
+		t.Errorf("notify called %d times, want 1 (a session flip changes the board)", *notify)
+	}
+}
+
+// AC2: a session.ended marks the session finished and notifies.
+func TestProcess_SessionEnded_FinishedAndNotified(t *testing.T) {
+	h, store, notify := newHandler(t)
+	h.Process(context.Background(), &fakeDelivery{body: fixture(t, contractDir(t), "examples/timing/session.started.v1.example.json")})
+	d := &fakeDelivery{body: fixture(t, contractDir(t), "examples/timing/session.ended.v1.example.json")}
+
+	h.Process(context.Background(), d)
+
+	if !d.acked || d.nacked {
+		t.Errorf("session.ended: acked=%v nacked=%v, want acked", d.acked, d.nacked)
+	}
+	if b := currentBoard(t, store); b == nil || b.Status != persistence.StatusFinished {
+		t.Errorf("board = %+v, want finished", b)
+	}
+	if *notify != 2 {
+		t.Errorf("notify called %d times, want 2 (start + end)", *notify)
+	}
+}
+
+// AC3 (M6): a redelivered session.started envelope id is a no-op — acked, not
+// re-applied, and crucially does NOT notify (no SSE churn on duplicates).
+func TestProcess_DuplicateSessionStarted_NoOpAckedNoNotify(t *testing.T) {
+	h, store, notify := newHandler(t)
+	body := fixture(t, contractDir(t), "examples/timing/session.started.v1.example.json")
+	h.Process(context.Background(), &fakeDelivery{body: body})
+	d2 := &fakeDelivery{body: body}
+
+	h.Process(context.Background(), d2)
+
+	if !d2.acked {
+		t.Error("a redelivered session.started must still be acked (dedupe no-op)")
+	}
+	if b := currentBoard(t, store); b == nil || b.Status != persistence.StatusActive {
+		t.Errorf("board = %+v, want still active", b)
+	}
+	if *notify != 1 {
+		t.Errorf("notify called %d times, want 1 (duplicate must not notify)", *notify)
+	}
+}
+
+// AC3: an invalid session.started (committed known-bad fixture) is never applied —
+// logged + nacked without requeue, exactly like an invalid lap.
+func TestProcess_InvalidSessionStarted_NotAppliedNackedNoRequeue(t *testing.T) {
+	h, store, notify := newHandler(t)
+	d := &fakeDelivery{body: fixture(t, contractDir(t), "examples/timing/session.started.v1.invalid.json")}
+
+	h.Process(context.Background(), d)
+
+	if d.acked {
+		t.Error("an invalid session.started must NOT be acked")
+	}
+	if !d.nacked || d.requeue {
+		t.Errorf("invalid session.started: nacked=%v requeue=%v, want nacked with requeue=false", d.nacked, d.requeue)
+	}
+	if b := currentBoard(t, store); b != nil {
+		t.Errorf("an invalid session.started must not touch the read-model: %+v", b)
+	}
+	if *notify != 0 {
+		t.Error("an invalid session.started must not notify")
+	}
+}
+
+// AC3: a lap arriving BEFORE its session.started routes its sessionId into the
+// store and starts the implicit board (the consumer threads sessionId through).
+func TestProcess_LapBeforeStart_ImplicitBoard(t *testing.T) {
+	h, store, _ := newHandler(t)
+	h.Process(context.Background(), &fakeDelivery{body: lapEnvelope(
+		"44444444-4444-7444-8444-444444444444", "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21", 42000, "2026-06-08T10:00:01.000Z")})
+
+	b := currentBoard(t, store)
+	if b == nil || b.SessionID != "s1" || b.Status != persistence.StatusImplicit {
+		t.Errorf("board = %+v, want implicit s1 (lap's sessionId threaded through)", b)
+	}
+	if len(b.Bests) != 1 {
+		t.Errorf("the early lap must land on the implicit board: %+v", b.Bests)
 	}
 }
 
