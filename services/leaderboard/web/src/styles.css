@@ -13,6 +13,7 @@
   --border: #26282d;
   --accent: #ff8400;
   --accent-text: #140a00;
+  --success: #4ed694;
   --focus-ring: #f4ede2;
 
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -42,10 +43,40 @@ body {
   padding: 2rem 1rem;
 }
 
+.board__header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 1.25rem;
+}
+
 .board__title {
   font-size: 1.6rem;
   letter-spacing: -0.02em;
-  margin: 0 0 1.25rem;
+  margin: 0;
+}
+
+/*
+ * status-pill (DESIGN.md): mono, fully rounded, 1px outlined; honest state
+ * signalling, always paired with the text label (never color alone). The
+ * session status is active (success) / finished (muted) — FR45. Status colors
+ * are reserved for state; orange stays the fastest-row accent.
+ */
+.status-pill {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: transparent;
+}
+.status-pill--active {
+  color: var(--success);
+}
+.status-pill--finished {
+  color: var(--text-muted);
 }
 
 .standings {

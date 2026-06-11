@@ -66,10 +66,7 @@ func TestLeaderboardConsumesLapsEndToEnd(t *testing.T) {
 		if serr != nil {
 			t.Errorf("CurrentBoard: %v", serr)
 		}
-		if b == nil {
-			return web.ToSnapshot(nil)
-		}
-		return web.ToSnapshot(b.Bests)
+		return web.ToSnapshot(b)
 	}
 	server := web.NewServer(":0", snapshot, quietLog())
 

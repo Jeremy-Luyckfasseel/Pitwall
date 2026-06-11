@@ -9,14 +9,25 @@ interface RowView {
   lapTime: string;
   isFastest: boolean;
 }
+// Session status block (FR45): "active" | "finished"; null before any session
+// has ever been seen (matches internal/web.SessionView).
+interface SessionView {
+  sessionId: string;
+  status: string;
+}
 interface Snapshot {
+  session: SessionView | null;
   rows: RowView[];
 }
 
 // App subscribes to /events (Server-Sent Events) and re-renders the standings in
 // place on every pushed snapshot — no polling, no reload (Q26.1, AC4). The board
-// is read-only: it never sends anything back to the server.
+// is read-only: it never sends anything back to the server. A session.started
+// auto-resets the board (the snapshot simply carries the new session's rows) and
+// the status-pill flips between active and finished (FR43/FR45) — status is
+// always paired with its text label, never color alone.
 export function App() {
+  const [session, setSession] = useState<SessionView | null>(null);
   const [rows, setRows] = useState<RowView[]>([]);
 
   useEffect(() => {
@@ -24,6 +35,7 @@ export function App() {
     source.onmessage = (e) => {
       try {
         const snap: Snapshot = JSON.parse(e.data);
+        setSession(snap.session ?? null);
         setRows(snap.rows ?? []);
       } catch {
         // Ignore a malformed frame; the next snapshot supersedes it.
@@ -36,6 +48,18 @@ export function App() {
     <main className="board">
       <header className="board__header">
         <h1 className="board__title">Live Standings</h1>
+        {session && (
+          <span
+            className={
+              "status-pill mono" +
+              (session.status === "finished"
+                ? " status-pill--finished"
+                : " status-pill--active")
+            }
+          >
+            {session.status}
+          </span>
+        )}
       </header>
       <ol className="standings" aria-label="Live race standings" aria-live="polite">
         {rows.length === 0 && (

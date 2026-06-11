@@ -129,10 +129,7 @@ func run() int {
 			log.Error("failed to read the current board for snapshot", "error", serr.Error())
 			return web.Snapshot{Rows: []web.RowView{}}
 		}
-		if b == nil {
-			return web.ToSnapshot(nil) // no session ever seen: the waiting state
-		}
-		return web.ToSnapshot(b.Bests)
+		return web.ToSnapshot(b) // nil board = no session ever seen (waiting state)
 	}
 	server := web.NewServer(cfg.HTTPAddr, snapshot, log)
 
