@@ -10,9 +10,12 @@ another's code or reads its database.
 service skeleton on the bus** (heartbeat · structured logs · graceful shutdown). **Story 1.7**
 added [`leaderboard/`](leaderboard/) — the first **consumer**: it consumes Timing's
 `lap.recorded`, dedupes via an idempotent inbox, folds best-lap standings, and serves a live
-trackside board over SSE. The remaining Epic-1 stories grow both services (session lifecycle,
-DLQ, reconnect); the Go blueprint machinery built inline in `timing/` (and duplicated in
-`leaderboard/`) is extracted to `libs/go-pitwall` in Epic 2.
+trackside board over SSE. **Story 1.8** made it **session-aware**: it consumes
+`session.started`/`session.ended`, auto-resets per session (session-keyed standings + a local
+epoch), shows active/finished status, and tolerates out-of-order/replayed events (NFR24). The
+remaining Epic-1 stories grow both services (DLQ, reconnect); the Go blueprint machinery built
+inline in `timing/` (and duplicated in `leaderboard/`) is extracted to `libs/go-pitwall` in
+Epic 2.
 
 Planned layout (target — see `architecture.md` §"Target Directory Structure"):
 
