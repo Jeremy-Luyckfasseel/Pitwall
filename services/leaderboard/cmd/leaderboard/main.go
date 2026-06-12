@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -29,8 +30,11 @@ import (
 )
 
 // consumeQueue is this consumer's durable queue, bound to the producer's
-// timing.events exchange on lap.recorded. (Story 1.9 will redeclare it with DLX
-// args — see the consumer_bus.go note.)
+// timing.events exchange on lap.recorded + session.started + session.ended
+// (one queue preserves the producer's publish order across event types). The
+// name predates the session bindings (Story 1.8) and is deliberately kept —
+// renaming would orphan the existing durable queue on dev brokers. (Story 1.9
+// will redeclare it with DLX args — see the consumer_bus.go note.)
 const consumeQueue = "leaderboard.lap-recorded"
 
 func main() {
@@ -98,8 +102,12 @@ func run() int {
 	if err := bus.DeclareConsumerQueue(messaging.ConsumerOptions{
 		SourceExchange: cfg.TimingExchange,
 		QueueName:      consumeQueue,
-		RoutingKey:     messaging.LapRecordedRoutingKey,
-		Prefetch:       cfg.ConsumePrefetch,
+		RoutingKeys: []string{
+			messaging.LapRecordedRoutingKey,
+			messaging.SessionStartedRoutingKey,
+			messaging.SessionEndedRoutingKey,
+		},
+		Prefetch: cfg.ConsumePrefetch,
 	}); err != nil {
 		log.Error("failed to declare/bind the consumer queue", "error", err.Error())
 		_ = bus.Close()
@@ -112,17 +120,28 @@ func run() int {
 		return 1
 	}
 	log.Info("consuming", "queue", consumeQueue, "source", cfg.TimingExchange,
-		"routingKey", messaging.LapRecordedRoutingKey, "prefetch", cfg.ConsumePrefetch)
+		"routingKeys", []string{messaging.LapRecordedRoutingKey,
+			messaging.SessionStartedRoutingKey, messaging.SessionEndedRoutingKey},
+		"prefetch", cfg.ConsumePrefetch)
 
 	// The live board: serves the embedded SPA + pushes standings over SSE. The
-	// snapshot func reads the projection on demand (the board owns no state).
+	// snapshot func reads the CURRENT session's board on demand (the board owns
+	// no state; the auto-reset IS this read switching to the newest session).
+	// On a transient read error it serves the LAST-KNOWN-GOOD snapshot instead
+	// of the waiting state — a DB hiccup must never visibly wipe a live board
+	// (session:null is reserved for "no session ever seen").
+	var snapMu sync.Mutex
+	lastGood := web.ToSnapshot(nil)
 	snapshot := func() web.Snapshot {
-		bests, serr := store.AllBests(context.Background())
+		b, serr := store.CurrentBoard(context.Background())
+		snapMu.Lock()
+		defer snapMu.Unlock()
 		if serr != nil {
-			log.Error("failed to read standings for snapshot", "error", serr.Error())
-			return web.Snapshot{Rows: []web.RowView{}}
+			log.Error("failed to read the current board for snapshot; serving last-known-good", "error", serr.Error())
+			return lastGood
 		}
-		return web.ToSnapshot(bests)
+		lastGood = web.ToSnapshot(b) // nil board = no session ever seen (waiting state)
+		return lastGood
 	}
 	server := web.NewServer(cfg.HTTPAddr, snapshot, log)
 

@@ -1,17 +1,23 @@
 package web
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/domain"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/persistence"
 )
 
-// AC3/AC1: the snapshot is ordered, positioned, fastest-flagged, with the
-// short-masterId display fallback and a formatted (mono/tabular) lap time.
+// AC1 regression: the snapshot rows are ordered, positioned, fastest-flagged,
+// with the short-masterId display fallback and a formatted (mono/tabular) time.
 func TestToSnapshot_OrdersPositionsAndFlags(t *testing.T) {
-	snap := ToSnapshot([]domain.DriverBest{
-		{MasterID: "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21", BestLapMs: 41000, BestLapAt: "2026-06-08T10:00:01.000Z", BestLapSeq: 1},
-		{MasterID: "2b8e6d31-4f95-4e22-8bb3-6c7d5e4f3a10", BestLapMs: 42000, BestLapAt: "2026-06-08T10:00:02.000Z", BestLapSeq: 2},
+	snap := ToSnapshot(&persistence.Board{
+		SessionID: "s1",
+		Status:    persistence.StatusActive,
+		Bests: []domain.DriverBest{
+			{MasterID: "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21", BestLapMs: 41000, BestLapAt: "2026-06-08T10:00:01.000Z", BestLapSeq: 1},
+			{MasterID: "2b8e6d31-4f95-4e22-8bb3-6c7d5e4f3a10", BestLapMs: 42000, BestLapAt: "2026-06-08T10:00:02.000Z", BestLapSeq: 2},
+		},
 	})
 	if len(snap.Rows) != 2 {
 		t.Fatalf("want 2 rows, got %d", len(snap.Rows))
@@ -34,6 +40,61 @@ func TestToSnapshot_OrdersPositionsAndFlags(t *testing.T) {
 	}
 }
 
+// AC2: the session block carries the sessionId + display status. The stored
+// statuses map to FR45's display vocabulary: active -> active,
+// implicit -> active (laps are physically flowing), finished -> finished.
+func TestToSnapshot_SessionStatusMapping(t *testing.T) {
+	cases := []struct {
+		stored string
+		want   string
+	}{
+		{persistence.StatusActive, "active"},
+		{persistence.StatusImplicit, "active"},
+		{persistence.StatusFinished, "finished"},
+	}
+	for _, c := range cases {
+		snap := ToSnapshot(&persistence.Board{SessionID: "s1", Status: c.stored})
+		if snap.Session == nil {
+			t.Fatalf("stored %q: Session block missing", c.stored)
+		}
+		if snap.Session.SessionID != "s1" || snap.Session.Status != c.want {
+			t.Errorf("stored %q: session = %+v, want s1/%s", c.stored, snap.Session, c.want)
+		}
+	}
+}
+
+// Before any session has ever been seen the session block is null (the SPA's
+// waiting state) and rows serialize as [] not null.
+func TestToSnapshot_NilBoard_WaitingState(t *testing.T) {
+	snap := ToSnapshot(nil)
+	if snap.Session != nil {
+		t.Errorf("nil board: Session = %+v, want nil", snap.Session)
+	}
+	if snap.Rows == nil || len(snap.Rows) != 0 {
+		t.Errorf("nil board: Rows = %#v, want empty non-nil slice", snap.Rows)
+	}
+	b, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(b)
+	if s != `{"session":null,"rows":[]}` {
+		t.Errorf("wire shape = %s, want {\"session\":null,\"rows\":[]}", s)
+	}
+}
+
+// A fresh session with no laps yet: session block present, rows empty (the
+// auto-reset as a connected client sees it).
+func TestToSnapshot_FreshSession_EmptyRows(t *testing.T) {
+	snap := ToSnapshot(&persistence.Board{SessionID: "s2", Status: persistence.StatusActive})
+	if snap.Session == nil || snap.Session.SessionID != "s2" || snap.Session.Status != "active" {
+		t.Errorf("session = %+v, want s2 active", snap.Session)
+	}
+	if snap.Rows == nil || len(snap.Rows) != 0 {
+		t.Errorf("rows = %#v, want empty non-nil slice", snap.Rows)
+	}
+}
+
 func TestFormatLapTime(t *testing.T) {
 	cases := map[int64]string{
 		42318:  "0:42.318",
@@ -45,15 +106,5 @@ func TestFormatLapTime(t *testing.T) {
 		if got := formatLapTime(ms); got != want {
 			t.Errorf("formatLapTime(%d) = %q, want %q", ms, got, want)
 		}
-	}
-}
-
-func TestToSnapshot_Empty(t *testing.T) {
-	snap := ToSnapshot(nil)
-	if snap.Rows == nil {
-		t.Error("Rows should be a non-nil (empty) slice so it serializes as [] not null")
-	}
-	if len(snap.Rows) != 0 {
-		t.Errorf("want 0 rows, got %d", len(snap.Rows))
 	}
 }

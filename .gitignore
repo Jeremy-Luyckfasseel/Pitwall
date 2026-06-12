@@ -21,6 +21,9 @@ __pycache__/
 bin/
 obj/
 
+# TypeScript incremental-build state (tsc -b) — a local cache, never committed
+*.tsbuildinfo
+
 # Go build/test artifacts (binaries are built in Docker; modules fetched fresh)
 *.exe
 *.test

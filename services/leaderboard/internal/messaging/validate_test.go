@@ -49,6 +49,31 @@ func TestValidateEnvelopeBytes_RejectsCommittedInvalidFixture(t *testing.T) {
 	}
 }
 
+// AC2/AC3 (validate-on-consume, Story 1.8): both committed session.* examples
+// pass and both known-bad fixtures are rejected — the session lifecycle events
+// go through exactly the same two-sided validation as laps.
+func TestValidateEnvelopeBytes_SessionFixtures(t *testing.T) {
+	v, dir := testValidator(t)
+	cases := []struct {
+		rel       string
+		wantValid bool
+	}{
+		{"examples/timing/session.started.v1.example.json", true},
+		{"examples/timing/session.ended.v1.example.json", true},
+		{"examples/timing/session.started.v1.invalid.json", false},
+		{"examples/timing/session.ended.v1.invalid.json", false},
+	}
+	for _, c := range cases {
+		err := v.ValidateEnvelopeBytes(readFixture(t, dir, c.rel))
+		if c.wantValid && err != nil {
+			t.Errorf("%s should pass validation, got: %v", c.rel, err)
+		}
+		if !c.wantValid && err == nil {
+			t.Errorf("%s must be rejected on consume, got nil error", c.rel)
+		}
+	}
+}
+
 // Fail-closed: an envelope whose type has no registered /contract data schema is
 // rejected (the consumer must never apply an event it cannot validate).
 func TestValidateEnvelopeBytes_RejectsUnknownType(t *testing.T) {

@@ -1,13 +1,15 @@
 // Package web serves the live trackside board: the //go:embed-ed Vite/React SPA
-// and an SSE endpoint that pushes the standings snapshot on connect and on every
+// and an SSE endpoint that pushes the board snapshot on connect and on every
 // read-model change (Q26.1: SSE, never HTTP polling, never an HTTP /health). The
-// render mapper turns the domain standings into the JSON shape the SPA renders.
+// render mapper turns the current session's board into the JSON shape the SPA
+// renders — including the session status block (FR45).
 package web
 
 import (
 	"fmt"
 
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/domain"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/persistence"
 )
 
 // RowView is one rendered standings row (the wire shape the SSE stream sends and
@@ -21,16 +23,31 @@ type RowView struct {
 	IsFastest   bool   `json:"isFastest"`
 }
 
-// Snapshot is the full board state pushed over SSE.
-type Snapshot struct {
-	Rows []RowView `json:"rows"`
+// SessionView is the session status block (FR45). Status uses the DISPLAY
+// vocabulary: "active" | "finished" (the stored 'implicit' gate renders as
+// active — laps are physically flowing; implicit-vs-active is an NFR24
+// reconciliation detail, not a spectator-facing state).
+type SessionView struct {
+	SessionID string `json:"sessionId"`
+	Status    string `json:"status"`
 }
 
-// ToSnapshot ranks the driver bests (best lap asc, first-to-set tie-break) and
-// maps each to a render row. Display name falls back to the short masterId — Epic
-// 1 has no nicknames or racing numbers (Q26.3); the overlay arrives in Epic 3.
-func ToSnapshot(bests []domain.DriverBest) Snapshot {
-	ranked := domain.Rank(bests)
+// Snapshot is the full board state pushed over SSE. Session is null only before
+// any session has ever been seen (the SPA's waiting state).
+type Snapshot struct {
+	Session *SessionView `json:"session"`
+	Rows    []RowView    `json:"rows"`
+}
+
+// ToSnapshot maps the current session's board (nil when no session has ever
+// been seen) to the render shape: ranked rows (best lap asc, first-to-set
+// tie-break) plus the session status block. Display name falls back to the
+// short masterId — Epic 1 has no nicknames (Q26.3); the overlay arrives in Epic 3.
+func ToSnapshot(board *persistence.Board) Snapshot {
+	if board == nil {
+		return Snapshot{Rows: []RowView{}}
+	}
+	ranked := domain.Rank(board.Bests)
 	rows := make([]RowView, 0, len(ranked))
 	for _, r := range ranked {
 		rows = append(rows, RowView{
@@ -42,7 +59,18 @@ func ToSnapshot(bests []domain.DriverBest) Snapshot {
 			IsFastest:   r.IsFastest,
 		})
 	}
-	return Snapshot{Rows: rows}
+	return Snapshot{
+		Session: &SessionView{SessionID: board.SessionID, Status: displayStatus(board.Status)},
+		Rows:    rows,
+	}
+}
+
+// displayStatus maps the stored lifecycle gate to FR45's two display states.
+func displayStatus(stored string) string {
+	if stored == persistence.StatusFinished {
+		return "finished"
+	}
+	return "active"
 }
 
 // formatLapTime renders milliseconds as m:ss.mmm (minutes have no leading zero;

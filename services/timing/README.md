@@ -52,9 +52,9 @@ here is **extracted** to `libs/go-pitwall` in Epic 2 (grow-don't-pre-scaffold).
 > Epic 2. No id-minting path is baked into the skeleton.
 >
 > The producer seam is `relay.NewEnqueuer(db, store, validate, relay)` (commits the
-> outbox row in its own tx, then kicks the relay). **Session lifecycle / out-of-order
-> tolerance** (1.8) and the **event store + replay** (ADR-0005, Story 1.10) are
-> deliberately not here.
+> outbox row in its own tx, then kicks the relay). The **consumer-side session gating /
+> out-of-order tolerance** (Story 1.8) lives in `services/leaderboard`; the **event
+> store + replay** (ADR-0005, Story 1.10) is deliberately not here.
 
 ## Events
 
