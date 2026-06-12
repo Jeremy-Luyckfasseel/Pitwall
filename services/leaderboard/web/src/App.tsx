@@ -63,7 +63,11 @@ export function App() {
       </header>
       <ol className="standings" aria-label="Live race standings" aria-live="polite">
         {rows.length === 0 && (
-          <li className="standings__empty">Waiting for the first lap…</li>
+          <li className="standings__empty">
+            {session?.status === "finished"
+              ? "No laps were recorded in this session."
+              : "Waiting for the first lap…"}
+          </li>
         )}
         {rows.map((r) => (
           <li
