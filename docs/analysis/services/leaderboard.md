@@ -31,6 +31,8 @@ local copy of the current session's standings + leaderboard nicknames (from Driv
 |---|---|
 | Lap arrives before `session.started` seen | Start an implicit board keyed on the lap's `sessionId`; reconcile when the start event arrives. |
 | Out-of-order / duplicate laps | Idempotent by message id; standings recomputed from the best-known set. |
+| Invalid message on consume (fails `/contract`, or blank `sessionId`) | **Parked immediately** in `leaderboard.lap-recorded.parking` + alert — never retried as poison, never applied (Story 1.9, M5). |
+| Processing failure (transient or genuine poison) | **TTL-retry with exponential backoff** via `leaderboard.lap-recorded.retry` (1s→2s→4s→8s); clears within the cap → applied once; exceeds the 5-attempt cap → **parked + Control-Room alert** (Story 1.9, NFR4/NFR6). |
 | Missing nickname | Fall back to a racing number or a short form of `masterId`; update when `driver.profile_updated` arrives. |
 | Service restart mid-session | Rebuild the board by replaying the session's events from the last marker. |
 | RabbitMQ down | Display freezes on last-known standings (clearly the safe degradation); catches up on reconnect. |
