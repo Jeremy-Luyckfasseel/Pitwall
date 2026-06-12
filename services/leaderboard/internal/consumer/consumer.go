@@ -4,6 +4,14 @@
 // signals the web layer when the read-model actually changed. It works against
 // the broker-agnostic messaging.Delivery interface so it is unit-testable with a
 // fake delivery (no RabbitMQ needed).
+//
+// Failure handling (Story 1.9) routes through the consumer-side DLQ rather than
+// dropping: an INVALID message (bad /contract, undecodable, blank sessionId) is
+// parked immediately (never retried as poison); a PROCESSING failure (the store
+// errors) is retried with exponential backoff and, on exceeding the cap, parked.
+// Every park emits a Control-Room-bound alert — "logged + dead-lettered, never
+// silently dropped" (NFR4/M5). Parking/retry are injected funcs so the handler
+// stays broker-agnostic and unit-testable.
 package consumer
 
 import (
@@ -36,6 +44,14 @@ type Handler struct {
 	Now      func() string // processedAt stamp; defaults to wire-now
 	StartSeq int64         // seed the ingest sequence (e.g. max stored seq) for restart monotonicity
 
+	// DLQ wiring (Story 1.9). Policy decides retry-vs-park from the redelivery
+	// count; Retry republishes a failed message to the retry queue with the
+	// backoff TTL; Park routes a message terminally to the parking quarantine.
+	// Retry/Park are injected (wrap messaging.Bus in production; spies in tests).
+	Policy domain.DLQPolicy
+	Retry  func(ctx context.Context, body []byte, delayMs, nextRetries int) error
+	Park   func(ctx context.Context, body []byte, reason string) error
+
 	seq atomic.Int64
 }
 
@@ -59,23 +75,22 @@ func (h *Handler) Run(ctx context.Context, deliveries <-chan messaging.Delivery)
 
 // Process handles a single delivery. Every rejection is LOGGED (never a silent
 // drop). The ack/nack discipline: ack only AFTER the local state change commits
-// (NFR6); a transient store error requeues; an invalid/undecodable message is
-// nacked without requeue (no poison loop — Story 1.9 adds the DLX that turns
-// this into a true dead-letter); an unhandled-but-valid type is acked + ignored
-// (tolerant reader).
+// (NFR6); a processing failure is retried then parked (Story 1.9); an
+// invalid/undecodable message is parked immediately (not retried as poison); an
+// unhandled-but-valid type is acked + ignored (tolerant reader).
 func (h *Handler) Process(ctx context.Context, d messaging.Delivery) {
 	body := d.Body()
 
 	if err := h.Validate(body); err != nil {
 		h.Log.Error("rejecting invalid message (failed /contract validation on consume)", "error", err.Error())
-		h.nack(d, false)
+		h.park(ctx, d, "contract-invalid", "", "")
 		return
 	}
 
 	env, err := messaging.DecodeIncoming(body)
 	if err != nil {
 		h.Log.Error("rejecting undecodable envelope", "error", err.Error())
-		h.nack(d, false)
+		h.park(ctx, d, "undecodable-envelope", "", "")
 		return
 	}
 
@@ -97,10 +112,10 @@ func (h *Handler) processLap(ctx context.Context, d messaging.Delivery, env mess
 	data, err := messaging.DecodeLapRecorded(env)
 	if err != nil {
 		h.Log.Error("rejecting lap.recorded with undecodable data", "error", err.Error(), "eventId", env.ID)
-		h.nack(d, false)
+		h.park(ctx, d, "undecodable-data", env.ID, env.CorrelationID)
 		return
 	}
-	if !h.sessionIDOK(d, env, data.SessionID) {
+	if !h.sessionIDOK(ctx, d, env, data.SessionID) {
 		return
 	}
 
@@ -111,7 +126,7 @@ func (h *Handler) processLap(ctx context.Context, d messaging.Delivery, env mess
 		Seq:       h.seq.Add(1),
 	}
 	applied, duplicate, err := h.Store.ApplyLap(ctx, env.ID, env.Type, h.now(), data.SessionID, lap)
-	if !h.settle(d, env, applied, duplicate, err, "lap") {
+	if !h.settle(ctx, d, env, applied, duplicate, err, "lap") {
 		return
 	}
 	h.Log.Debug("lap applied", "eventId", env.ID, "masterId", data.MasterID, "sessionId", data.SessionID,
@@ -125,14 +140,14 @@ func (h *Handler) processSessionStarted(ctx context.Context, d messaging.Deliver
 	data, err := messaging.DecodeSessionStarted(env)
 	if err != nil {
 		h.Log.Error("rejecting session.started with undecodable data", "error", err.Error(), "eventId", env.ID)
-		h.nack(d, false)
+		h.park(ctx, d, "undecodable-data", env.ID, env.CorrelationID)
 		return
 	}
-	if !h.sessionIDOK(d, env, data.SessionID) {
+	if !h.sessionIDOK(ctx, d, env, data.SessionID) {
 		return
 	}
 	applied, duplicate, err := h.Store.ApplySessionStarted(ctx, env.ID, env.Type, h.now(), data.SessionID, data.StartedAt)
-	if !h.settle(d, env, applied, duplicate, err, "session.started") {
+	if !h.settle(ctx, d, env, applied, duplicate, err, "session.started") {
 		return
 	}
 	h.Log.Info("session started", "eventId", env.ID, "sessionId", data.SessionID,
@@ -145,14 +160,14 @@ func (h *Handler) processSessionEnded(ctx context.Context, d messaging.Delivery,
 	data, err := messaging.DecodeSessionEnded(env)
 	if err != nil {
 		h.Log.Error("rejecting session.ended with undecodable data", "error", err.Error(), "eventId", env.ID)
-		h.nack(d, false)
+		h.park(ctx, d, "undecodable-data", env.ID, env.CorrelationID)
 		return
 	}
-	if !h.sessionIDOK(d, env, data.SessionID) {
+	if !h.sessionIDOK(ctx, d, env, data.SessionID) {
 		return
 	}
 	applied, duplicate, err := h.Store.ApplySessionEnded(ctx, env.ID, env.Type, h.now(), data.SessionID, data.EndedAt)
-	if !h.settle(d, env, applied, duplicate, err, "session.ended") {
+	if !h.settle(ctx, d, env, applied, duplicate, err, "session.ended") {
 		return
 	}
 	h.Log.Info("session ended", "eventId", env.ID, "sessionId", data.SessionID,
@@ -162,28 +177,26 @@ func (h *Handler) processSessionEnded(ctx context.Context, d messaging.Delivery,
 // sessionIDOK guards the one wire field the read-model keys on that /contract
 // does not length-pin (sessionId has no minLength, unlike masterId's pattern):
 // an empty/blank sessionId would implicit-create a nameless current board, so
-// the event is rejected exactly like an invalid message (logged + nacked
-// without requeue — never applied, never silently dropped).
-func (h *Handler) sessionIDOK(d messaging.Delivery, env messaging.IncomingEnvelope, sessionID string) bool {
+// the event is parked exactly like an invalid message (logged + quarantined —
+// never applied, never retried, never silently dropped).
+func (h *Handler) sessionIDOK(ctx context.Context, d messaging.Delivery, env messaging.IncomingEnvelope, sessionID string) bool {
 	if strings.TrimSpace(sessionID) != "" {
 		return true
 	}
 	h.Log.Error("rejecting "+env.Type+" with empty sessionId", "eventId", env.ID,
 		"correlationId", env.CorrelationID)
-	h.nack(d, false)
+	h.park(ctx, d, "blank-session-id", env.ID, env.CorrelationID)
 	return false
 }
 
-// settle is the shared ack/nack + notify discipline: a transient store error
-// requeues (no ack — NFR6); success acks AFTER the commit; a duplicate is a
-// logged no-op; a read-model change notifies the web layer. Returns true for
-// any committed non-duplicate — including applied=false no-ops — so the caller
-// can emit its domain log line (which carries the applied flag).
-func (h *Handler) settle(d messaging.Delivery, env messaging.IncomingEnvelope, applied, duplicate bool, err error, what string) bool {
+// settle is the shared ack/notify discipline. On a processing failure it routes
+// the message through the DLQ (retry then park — Story 1.9) and returns false;
+// success acks AFTER the commit; a duplicate is a logged no-op; a read-model
+// change notifies the web layer. Returns true for any committed non-duplicate —
+// including applied=false no-ops — so the caller can emit its domain log line.
+func (h *Handler) settle(ctx context.Context, d messaging.Delivery, env messaging.IncomingEnvelope, applied, duplicate bool, err error, what string) bool {
 	if err != nil {
-		// Transient (e.g. DB) failure: do NOT ack; requeue for another attempt.
-		h.Log.Error("failed to apply "+what+"; requeueing", "error", err.Error(), "eventId", env.ID)
-		h.nack(d, true)
+		h.retryOrPark(ctx, d, env, what, err)
 		return false
 	}
 	h.ack(d)
@@ -195,6 +208,54 @@ func (h *Handler) settle(d messaging.Delivery, env messaging.IncomingEnvelope, a
 		h.Notify()
 	}
 	return true
+}
+
+// retryOrPark handles a processing failure. Below the delivery-count cap it
+// republishes the message to the retry queue with the exponential backoff TTL,
+// then acks the original (it has taken ownership). At the cap it parks the
+// message (+ alert) and acks. A failed retry/park PUBLISH does NOT ack — it
+// requeues so a broker hiccup mid-republish never loses the message (NFR6).
+func (h *Handler) retryOrPark(ctx context.Context, d messaging.Delivery, env messaging.IncomingEnvelope, what string, applyErr error) {
+	dec := domain.NextRetry(d.RetryCount(), h.Policy)
+	if dec.Park {
+		h.Log.Error("apply "+what+" kept failing; parking after exhausting retries",
+			"error", applyErr.Error(), "eventId", env.ID, "maxAttempts", h.Policy.MaxAttempts)
+		h.park(ctx, d, "retries-exhausted", env.ID, env.CorrelationID)
+		return
+	}
+	if h.Retry == nil {
+		// Defensive: no retry sink wired → keep the message rather than drop it.
+		h.nack(d, true)
+		return
+	}
+	if err := h.Retry(ctx, d.Body(), dec.DelayMs, dec.NextRetries); err != nil {
+		h.Log.Error("failed to schedule DLQ retry; requeueing", "error", err.Error(), "eventId", env.ID)
+		h.nack(d, true)
+		return
+	}
+	h.Log.Warn("apply "+what+" failed; scheduled DLQ retry", "error", applyErr.Error(),
+		"eventId", env.ID, "retryInMs", dec.DelayMs, "attempt", dec.NextRetries, "correlationId", env.CorrelationID)
+	h.ack(d)
+}
+
+// park routes a message terminally to the parking quarantine queue and emits the
+// Control-Room-bound alert (a structured log line — placeholder until E12). The
+// original is acked only after the park publish succeeds; a publish failure
+// requeues it (never lost). With no Park sink wired it falls back to a no-requeue
+// nack so the work queue's DLX safety net captures it — never an ack-drop.
+func (h *Handler) park(ctx context.Context, d messaging.Delivery, reason, eventID, correlationID string) {
+	if h.Park == nil {
+		h.nack(d, false)
+		return
+	}
+	if err := h.Park(ctx, d.Body(), reason); err != nil {
+		h.Log.Error("failed to park message; requeueing", "error", err.Error(), "reason", reason, "eventId", eventID)
+		h.nack(d, true)
+		return
+	}
+	h.Log.Error("message parked (quarantined); not retried", "alert", "message_parked",
+		"reason", reason, "eventId", eventID, "correlationId", correlationID)
+	h.ack(d)
 }
 
 func (h *Handler) now() string {
