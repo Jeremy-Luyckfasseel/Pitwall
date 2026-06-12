@@ -15,6 +15,7 @@ type Bus struct {
 	conn     *amqp.Connection
 	ch       *amqp.Channel
 	exchange string // the service's own exchange (heartbeat publishes here)
+	dlx      string // the consumer-side dead-letter exchange (set by DeclareDLQTopology)
 }
 
 // Dial connects to the broker, opens a channel and declares the service's own
