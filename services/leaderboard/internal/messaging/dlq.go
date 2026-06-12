@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -152,6 +153,11 @@ func (b *Bus) DeclareDLQTopology(opts ConsumerOptions) error {
 // channel, and on 406 we delete the old queue and redeclare with args on a fresh
 // channel. Fresh brokers (CI / testcontainers) simply declare. The main channel
 // (b.ch) is never poisoned by the probe.
+//
+// The delete is **empty-only** (`ifEmpty=true`): we never drop a buffered-but-
+// unconsumed message during the one-time migration, and we do NOT assume any peer
+// will re-emit it (golden rule). If the stale queue still holds messages, we refuse
+// loudly so an operator drains it first — "never silently dropped" over convenience.
 func (b *Bus) declareWorkQueueResilient(name string, args amqp.Table) error {
 	probe, err := b.conn.Channel()
 	if err != nil {
@@ -163,16 +169,18 @@ func (b *Bus) declareWorkQueueResilient(name string, args amqp.Table) error {
 		_ = probe.Close()
 		return derr
 	}
-	// 406: the probe channel is already closed by the broker. Delete + redeclare
-	// on a fresh channel (the read-model is a rebuildable fold of events — FR41 —
-	// so dropping the old durable queue is safe; Timing's outbox re-emits).
+	// 406: the probe channel is already closed by the broker. Migrate the arg-less
+	// 1.7/1.8 queue to one carrying the DLX args by delete + redeclare on a fresh
+	// channel — but only if it is EMPTY, so no in-flight message is ever lost.
 	cleaner, cerr := b.conn.Channel()
 	if cerr != nil {
 		return cerr
 	}
 	defer func() { _ = cleaner.Close() }()
-	if _, delErr := cleaner.QueueDelete(name, false, false, false); delErr != nil {
-		return delErr
+	if _, delErr := cleaner.QueueDelete(name, false, true, false); delErr != nil {
+		return fmt.Errorf("cannot migrate queue %q to dead-letter args: it exists with stale args and is "+
+			"non-empty; drain it (or delete it manually) then restart — refusing to drop buffered messages: %w",
+			name, delErr)
 	}
 	if _, reErr := cleaner.QueueDeclare(name, true, false, false, false, args); reErr != nil {
 		return reErr
