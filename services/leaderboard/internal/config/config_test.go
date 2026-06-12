@@ -106,3 +106,60 @@ func TestLoad_RejectsNonPositivePrefetch(t *testing.T) {
 		t.Fatal("expected an error for non-positive CONSUME_PREFETCH")
 	}
 }
+
+// TestLoad_DLQDefaults pins the Story-1.9 / Q&A-Round-27 DLQ knobs: 5 attempts,
+// 1 s base, ×2 per hop, 60 s ceiling. These are confirm-at-build values — the
+// defaults must match exactly what the user approved.
+func TestLoad_DLQDefaults(t *testing.T) {
+	cfg, err := Load(envFunc(baseEnv()))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DLQMaxAttempts != 5 {
+		t.Errorf("DLQMaxAttempts default = %d, want 5", cfg.DLQMaxAttempts)
+	}
+	if cfg.DLQRetryBaseMs != 1000 {
+		t.Errorf("DLQRetryBaseMs default = %d, want 1000", cfg.DLQRetryBaseMs)
+	}
+	if cfg.DLQRetryMultiplier != 2 {
+		t.Errorf("DLQRetryMultiplier default = %d, want 2", cfg.DLQRetryMultiplier)
+	}
+	if cfg.DLQRetryMaxMs != 60000 {
+		t.Errorf("DLQRetryMaxMs default = %d, want 60000", cfg.DLQRetryMaxMs)
+	}
+}
+
+func TestLoad_DLQOverrides(t *testing.T) {
+	env := baseEnv()
+	env["DLQ_MAX_ATTEMPTS"] = "3"
+	env["DLQ_RETRY_BASE_MS"] = "500"
+	env["DLQ_RETRY_MULTIPLIER"] = "3"
+	env["DLQ_RETRY_MAX_MS"] = "30000"
+	cfg, err := Load(envFunc(env))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DLQMaxAttempts != 3 || cfg.DLQRetryBaseMs != 500 ||
+		cfg.DLQRetryMultiplier != 3 || cfg.DLQRetryMaxMs != 30000 {
+		t.Errorf("DLQ overrides not applied: %+v", cfg)
+	}
+}
+
+func TestLoad_RejectsBadDLQKnobs(t *testing.T) {
+	cases := map[string]map[string]string{
+		"DLQ_MAX_ATTEMPTS < 1":     {"DLQ_MAX_ATTEMPTS": "0"},
+		"DLQ_RETRY_BASE_MS <= 0":   {"DLQ_RETRY_BASE_MS": "0"},
+		"DLQ_RETRY_MULTIPLIER < 1": {"DLQ_RETRY_MULTIPLIER": "0"},
+		"DLQ_RETRY_MAX_MS < base":  {"DLQ_RETRY_BASE_MS": "5000", "DLQ_RETRY_MAX_MS": "1000"},
+		"DLQ_MAX_ATTEMPTS non-int": {"DLQ_MAX_ATTEMPTS": "lots"},
+	}
+	for name, overrides := range cases {
+		env := baseEnv()
+		for k, v := range overrides {
+			env[k] = v
+		}
+		if _, err := Load(envFunc(env)); err == nil {
+			t.Errorf("%s: expected a validation error, got nil", name)
+		}
+	}
+}
