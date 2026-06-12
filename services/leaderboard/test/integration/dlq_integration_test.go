@@ -219,6 +219,14 @@ func TestDLQ_TransientFailure_RetriedThenApplied(t *testing.T) {
 // TestDLQ_Poison_ParkedAndAlerted (AC2): an always-failing apply exhausts the cap
 // and the message is moved to the terminal parking queue (no further requeue),
 // the alert line is emitted, and the read-model is never touched.
+//
+// This test is ALSO the end-to-end proof that the `x-pitwall-retry-count` header
+// survives the real broker round-trip and increments across hops: with an
+// always-failing applier, the only way the message ever PARKS (rather than
+// retrying forever) is if `RetryCount()` reads the header back as 0→1→2→3→4 across
+// four genuine retry-queue→TTL→work-queue dead-letter cycles and trips the cap. If
+// RabbitMQ stripped or reset the header, the message would loop indefinitely and
+// `waitUntil` below would TIME OUT — so a green run is the load-bearing assertion.
 func TestDLQ_Poison_ParkedAndAlerted(t *testing.T) {
 	amqpURL := startBroker(t)
 	var logBuf syncBuffer
