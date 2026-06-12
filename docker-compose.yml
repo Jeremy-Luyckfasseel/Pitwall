@@ -118,6 +118,10 @@ services:
       DB_PATH: /data/leaderboard.db         # private SQLite DB (inbox + standings) on the durable volume
       HTTP_ADDR: ":8080"                    # in-container listen addr for the SSE endpoint + embedded SPA
       CONSUME_PREFETCH: ${CONSUME_PREFETCH:-16}
+      DLQ_MAX_ATTEMPTS: ${DLQ_MAX_ATTEMPTS:-5}            # Story 1.9 DLQ policy (Q&A Round 27)
+      DLQ_RETRY_BASE_MS: ${DLQ_RETRY_BASE_MS:-1000}       # exponential backoff: 1s -> 2s -> 4s -> 8s
+      DLQ_RETRY_MULTIPLIER: ${DLQ_RETRY_MULTIPLIER:-2}
+      DLQ_RETRY_MAX_MS: ${DLQ_RETRY_MAX_MS:-60000}
     ports:
       # Loopback only — the trackside board UI is viewable locally at http://127.0.0.1:<port>.
       # This is the live display (SSE + SPA), NOT a health endpoint (liveness is bus-only).
