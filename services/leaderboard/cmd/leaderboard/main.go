@@ -22,6 +22,7 @@ import (
 
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/config"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/consumer"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/domain"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/heartbeat"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/logging"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/messaging"
@@ -33,8 +34,9 @@ import (
 // timing.events exchange on lap.recorded + session.started + session.ended
 // (one queue preserves the producer's publish order across event types). The
 // name predates the session bindings (Story 1.8) and is deliberately kept —
-// renaming would orphan the existing durable queue on dev brokers. (Story 1.9
-// will redeclare it with DLX args — see the consumer_bus.go note.)
+// renaming would orphan the existing durable queue on dev brokers. Story 1.9
+// redeclares it WITH dead-letter args via DeclareDLQTopology (self-healing the
+// classic-queue immutable-args constraint — see messaging/dlq.go).
 const consumeQueue = "leaderboard.lap-recorded"
 
 func main() {
@@ -99,7 +101,7 @@ func run() int {
 	}
 	log.Info("connected; own exchange declared", "exchange", messaging.LeaderboardExchange, "instanceId", instanceID)
 
-	if err := bus.DeclareConsumerQueue(messaging.ConsumerOptions{
+	if err := bus.DeclareDLQTopology(messaging.ConsumerOptions{
 		SourceExchange: cfg.TimingExchange,
 		QueueName:      consumeQueue,
 		RoutingKeys: []string{
@@ -109,10 +111,16 @@ func run() int {
 		},
 		Prefetch: cfg.ConsumePrefetch,
 	}); err != nil {
-		log.Error("failed to declare/bind the consumer queue", "error", err.Error())
+		log.Error("failed to declare the consumer queue + DLQ topology", "error", err.Error())
 		_ = bus.Close()
 		return 1
 	}
+	log.Info("DLQ topology declared",
+		"dlx", messaging.LeaderboardDLXExchange,
+		"retryQueue", messaging.RetryQueueName(consumeQueue),
+		"parkingQueue", messaging.ParkingQueueName(consumeQueue),
+		"maxAttempts", cfg.DLQMaxAttempts, "retryBaseMs", cfg.DLQRetryBaseMs,
+		"retryMultiplier", cfg.DLQRetryMultiplier, "retryMaxMs", cfg.DLQRetryMaxMs)
 	deliveries, err := bus.Consume(consumeQueue)
 	if err != nil {
 		log.Error("failed to start consuming", "error", err.Error())
@@ -151,6 +159,16 @@ func run() int {
 		Log:      log,
 		Notify:   server.Publish, // push the new standings to all SSE clients
 		StartSeq: startSeq,
+		// DLQ wiring (Story 1.9): a processing failure retries with exponential
+		// backoff then parks; an invalid/poison message parks immediately.
+		Policy: domain.DLQPolicy{
+			MaxAttempts: cfg.DLQMaxAttempts,
+			BaseMs:      cfg.DLQRetryBaseMs,
+			Multiplier:  cfg.DLQRetryMultiplier,
+			MaxMs:       cfg.DLQRetryMaxMs,
+		},
+		Retry: bus.RetryToDLX,
+		Park:  bus.ParkToDLX,
 	}
 
 	emitter := &heartbeat.Emitter{
