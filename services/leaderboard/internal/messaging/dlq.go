@@ -30,10 +30,11 @@ const (
 
 	// Message headers. retryCountHeader carries the hop count across the retry
 	// round-trip (this IS the "aggregate x-death count" of the architecture, made
-	// explicit + deterministic). parkReasonHeader records why a message was
-	// quarantined (observability on the parking queue).
+	// explicit + deterministic). ParkReasonHeader records why a message was
+	// quarantined — exported because it is observable on every parked message
+	// (Control Room / E12 reads it off the parking queue).
 	retryCountHeader = "x-pitwall-retry-count"
-	parkReasonHeader = "x-pitwall-park-reason"
+	ParkReasonHeader = "x-pitwall-park-reason"
 )
 
 // RetryQueueName / ParkingQueueName derive the DLQ queue names from the work
@@ -71,7 +72,7 @@ func parseRetryCount(headers amqp.Table) int {
 func buildDLXPublishing(body []byte, expirationMs, retryCount int, parkReason string) amqp.Publishing {
 	h := amqp.Table{retryCountHeader: int32(retryCount)}
 	if parkReason != "" {
-		h[parkReasonHeader] = parkReason
+		h[ParkReasonHeader] = parkReason
 	}
 	p := amqp.Publishing{
 		ContentType:  "application/json",

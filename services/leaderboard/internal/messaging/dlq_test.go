@@ -48,7 +48,7 @@ func TestBuildDLXPublishing_Retry(t *testing.T) {
 	if got := parseRetryCount(p.Headers); got != 2 {
 		t.Errorf("retry-count header = %d, want 2", got)
 	}
-	if _, ok := p.Headers[parkReasonHeader]; ok {
+	if _, ok := p.Headers[ParkReasonHeader]; ok {
 		t.Error("a retry publish must not carry a park-reason header")
 	}
 }
@@ -58,8 +58,8 @@ func TestBuildDLXPublishing_Park(t *testing.T) {
 	if p.Expiration != "" {
 		t.Errorf("park publish must have NO expiration, got %q", p.Expiration)
 	}
-	if p.Headers[parkReasonHeader] != "contract-invalid" {
-		t.Errorf("park-reason header = %v, want contract-invalid", p.Headers[parkReasonHeader])
+	if p.Headers[ParkReasonHeader] != "contract-invalid" {
+		t.Errorf("park-reason header = %v, want contract-invalid", p.Headers[ParkReasonHeader])
 	}
 }
 
