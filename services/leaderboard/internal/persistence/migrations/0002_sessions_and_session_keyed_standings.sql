@@ -27,6 +27,13 @@ CREATE TABLE sessions (
 -- That is safe and honest: the projection is a rebuildable pure fold (FR41) and
 -- only dev data exists before the first deploy (Story 1.12).
 DROP TABLE standings;
+
+-- The inbox is cleared WITH the projection it guarded: keeping the old envelope
+-- ids would make any same-id redelivery/replay (Story 1.10) a dedupe no-op,
+-- permanently blocking the rebuild of the rows dropped above — "rebuildable
+-- pure fold" must stay true mechanically, not just rhetorically.
+DELETE FROM inbox;
+
 CREATE TABLE standings (
     session_id    TEXT NOT NULL,
     master_id     TEXT NOT NULL,
