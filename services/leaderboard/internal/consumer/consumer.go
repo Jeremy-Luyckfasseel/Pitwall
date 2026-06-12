@@ -176,8 +176,9 @@ func (h *Handler) sessionIDOK(d messaging.Delivery, env messaging.IncomingEnvelo
 
 // settle is the shared ack/nack + notify discipline: a transient store error
 // requeues (no ack — NFR6); success acks AFTER the commit; a duplicate is a
-// logged no-op; an actual read-model change notifies the web layer. Returns
-// true when the event was applied (the caller may log its domain line).
+// logged no-op; a read-model change notifies the web layer. Returns true for
+// any committed non-duplicate — including applied=false no-ops — so the caller
+// can emit its domain log line (which carries the applied flag).
 func (h *Handler) settle(d messaging.Delivery, env messaging.IncomingEnvelope, applied, duplicate bool, err error, what string) bool {
 	if err != nil {
 		// Transient (e.g. DB) failure: do NOT ack; requeue for another attempt.

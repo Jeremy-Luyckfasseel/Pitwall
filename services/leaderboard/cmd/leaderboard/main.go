@@ -30,8 +30,11 @@ import (
 )
 
 // consumeQueue is this consumer's durable queue, bound to the producer's
-// timing.events exchange on lap.recorded. (Story 1.9 will redeclare it with DLX
-// args — see the consumer_bus.go note.)
+// timing.events exchange on lap.recorded + session.started + session.ended
+// (one queue preserves the producer's publish order across event types). The
+// name predates the session bindings (Story 1.8) and is deliberately kept —
+// renaming would orphan the existing durable queue on dev brokers. (Story 1.9
+// will redeclare it with DLX args — see the consumer_bus.go note.)
 const consumeQueue = "leaderboard.lap-recorded"
 
 func main() {

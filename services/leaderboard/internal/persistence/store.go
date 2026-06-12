@@ -94,8 +94,10 @@ func (s *Store) ApplyLap(ctx context.Context, envelopeID, eventType, processedAt
 // stays finished (forward-only; a replayed start cannot reopen or wipe). The
 // session's standings rows and its epoch are never touched.
 //
-// applied reports whether anything visible changed (insert, status promotion,
-// or started_at fill-in) so the caller only notifies the board on real change.
+// applied reports whether the stored read-model changed at all (insert, status
+// promotion, or started_at fill-in) — a deliberately conservative signal: a
+// change on a NON-current session also notifies, costing one redundant (but
+// identical) SSE frame; only true no-ops and duplicates stay silent.
 func (s *Store) ApplySessionStarted(ctx context.Context, envelopeID, eventType, processedAt, sessionID, startedAt string) (applied bool, duplicate bool, err error) {
 	err = WithinTx(ctx, s.db, func(tx *sql.Tx) error {
 		seen, herr := hasSeen(ctx, tx, envelopeID)
