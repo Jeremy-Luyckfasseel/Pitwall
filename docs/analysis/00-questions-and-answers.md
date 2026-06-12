@@ -1083,3 +1083,52 @@ produces that event. This honors the no-invented-schema rule (golden rule + the 
 correctly with no nicknames; the overlay seam is designed but unwired. *(`session.started`/`session.ended`
 consumption — auto-reset and active/finished status, FR43/FR45 — are likewise **out of 1.7 scope**, owned
 by Story 1.8; 1.7 accumulates a single best-lap-per-driver board from `lap.recorded` only.)*
+
+## Round 27 — Poison-message handling: DLQ topology knobs (2026-06-12)
+
+> Decided during the build phase (Epic 1, **Story 1.9** — the first service to wire the consumer-side
+> **DLQ + TTL-retry + parking**, which the blueprint mandates for every service). The *design* was already
+> pinned in **Q19.5** (TTL-retry via a `<consumer>.<purpose>.retry` queue dead-lettering back to source +
+> a delivery-count cap → terminal `<consumer>.<purpose>.parking` quarantine + Control Room alert) and the
+> **topology names** in the architecture (DLX `<consumer>.dlx`, retry/parking queues). What was **explicitly
+> left open** — and the docs forbid inventing — were: the **queue type** (architecture's "pin classic vs
+> quorum **once**" gap) and the **retry cap + backoff TTLs** (epics §"Build-config knobs — *confirm at
+> build, not assumed*; recorded as story-level config, not invented values"). These are answered here before
+> building. **No new ADR** — they pin under-specified values inside the existing blueprint/ADR-0005 DLQ
+> rule, changing no architectural decision.
+
+**Q27.1 — Classic or quorum queues for the work / retry / parking queues (pinned once for the blueprint)?**
+A: **Classic queues.** Pitwall runs **single-node** RabbitMQ everywhere (Compose for dev/staging, one VPS
+for prod — ADR-0007), so quorum's HA/replication benefits (its main reason to exist) buy nothing here while
+costing more RAM against the 7 GB ceiling (Q19.4). The documented backoff is **exponential per hop** with a
+**single** `<consumer>.<purpose>.retry` queue, which the chosen mechanism implements via **per-message TTL**
+(`expiration` set per republish, doubling each hop) — classic queues support per-message TTL cleanly; quorum
+queues do not (they favour a fixed `x-delivery-limit`, which is constant-delay, not exponential). The
+delivery-count **cap** is read from the **aggregate `x-death` count** RabbitMQ stamps each time the retry
+queue dead-letters back to source (Q19.5 "cap on aggregate x-death"), so no custom counter is invented.
+*(Scope: this pins the type for the consumer-side DLQ topology across all services. A future clustered
+deployment could revisit, but that is not on the roadmap.)*
+
+**Q27.2 — How many delivery attempts before terminal parking (env knob `DLQ_MAX_ATTEMPTS`)?**
+A: **5 attempts** — the original live delivery + **4 retry hops**, then park. Matches the architecture's
+worked example ("e.g. 5 attempts") and gives transient faults (a brief DB hiccup, a momentary peer/bus
+blip) ample room to clear before a message is quarantined, while still terminating a genuinely-poison
+message in bounded time. The cap is evaluated against the aggregate `x-death` count (Q27.1); the
+**5th** failed attempt routes to `<consumer>.<purpose>.parking` + a Control-Room-bound alert.
+
+**Q27.3 — Exponential backoff schedule (env knobs `DLQ_RETRY_BASE_MS`, `DLQ_RETRY_MULTIPLIER`, `DLQ_RETRY_MAX_MS`)?**
+A: **1 s base, ×2 per hop.** Per-message retry TTL = `min(BASE · MULTIPLIER^(hop-1), MAX)`, giving the
+4 retry hops (under the cap of 5 from Q27.2) delays of **1 s → 2 s → 4 s → 8 s** (~15 s total in retry
+before parking). `DLQ_RETRY_BASE_MS=1000`, `DLQ_RETRY_MULTIPLIER=2`, `DLQ_RETRY_MAX_MS=60000` (the max is a
+blueprint ceiling that does not bind at this cap but caps growth for services that later raise the attempt
+count). Balanced for live timing data: fast enough to reconverge on a brief blip, slow enough not to hammer
+a struggling downstream.
+
+> **Two carry-through clarifications (determinable from the docs, recorded for the dev agent — not open
+> questions):** (a) an **invalid** message (fails validate-on-consume against `/contract`, or carries a
+> blank `sessionId`) is **logged + sent straight to `parking` + alerted — never entered into the retry
+> loop** (AC3 / M5: "not retried as poison"; retrying malformed bytes can never fix them, mirroring the
+> producer-side `quarantined` rationale). (b) The **alert** is, until Control Room (E12) exists, a
+> **structured ERROR log line** with a stable marker (no new `/contract` event is invented ahead of its
+> owner — golden rule + the Story-1.6/1.7 precedent); the parking queue itself is the durable, observable
+> quarantine.

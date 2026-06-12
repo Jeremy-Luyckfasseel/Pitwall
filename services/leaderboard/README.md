@@ -1,7 +1,7 @@
 # Leaderboard
 
 The live trackside standings service (Go) — the walking skeleton's first **consumer**
-(Stories 1.7–1.8). It consumes Timing's `lap.recorded` **and `session.started` /
+(Stories 1.7–1.9). It consumes Timing's `lap.recorded` **and `session.started` /
 `session.ended`** events off the **`timing.events`** exchange, dedupes them through a
 **durable idempotent inbox**, validates every message against `/contract` **on consume**,
 folds them into a **session-keyed best-lap standings** read-model with an
@@ -12,8 +12,9 @@ of consumed events.
 
 The inline blueprint blocks here (config, logging, heartbeat, messaging, persistence) are
 **duplicated** from `services/timing` by design; they are **extracted** to
-`libs/go-pitwall` in **Story 2.1** (grow-don't-pre-scaffold). DLQ/TTL-retry/parking
-(**1.9**) and the stale flag + replay-from-marker (**1.10**) build on this.
+`libs/go-pitwall` in **Story 2.1** (grow-don't-pre-scaffold). The consumer-side
+**DLQ/TTL-retry/parking** is wired here (**Story 1.9**, below); the stale flag +
+replay-from-marker (**1.10**) builds on this.
 
 ## Session lifecycle (Story 1.8 — FR43/FR45/NFR24)
 
@@ -61,11 +62,11 @@ gate**: `implicit → active → finished`. The standings are keyed **per
   `/` and pushes the standings snapshot to every connected client at `/events` on connect
   and on each read-model change (≤2 s convergence target, M7). This HTTP server is the
   **display, not a health endpoint** (liveness stays the touch-file).
-- **Validate-on-consume**: an invalid message (fails `/contract`) is **logged + rejected**
-  (`Nack`, no requeue) — never applied to the read-model, never silently dropped. *(There
-  is no DLX in 1.7; Story 1.9 adds the `<consumer>.dlx` + TTL-retry + parking so this
-  becomes a true dead-letter, and will redeclare the queue with `x-dead-letter-exchange`
-  args.)*
+- **Validate-on-consume + DLQ (Story 1.9)**: a failure is **logged + dead-lettered, never
+  silently dropped**. An **invalid** message (fails `/contract`, undecodable, or blank
+  `sessionId`) is parked **immediately**; a **processing** failure is retried with
+  exponential backoff and, on exceeding the cap, parked + alerted. See *Poison-message
+  handling* below.
 - Logs **structured JSON** (one correlationId per process; the per-message correlationId
   threads onto apply/reject logs) and shuts down **gracefully** on SIGTERM/SIGINT.
 
@@ -75,9 +76,39 @@ gate**: `implicit → active → finished`. The standings are keyed **per
 > nickname can set it in place in **Epic 3** — 1.7 adds **no** `driver` schema or binding
 > (Q&A Round 26, "tolerant of the producer not existing yet").
 >
-> **Out of scope (deliberately not here):** DLQ/retry/parking (**1.9**), the
-> stale/reconnecting flag + replay-from-marker (**1.10**), and the `libs/go-pitwall`
-> extraction (**2.1**).
+> **Out of scope (deliberately not here):** the stale/reconnecting flag +
+> replay-from-marker (**1.10**), and the `libs/go-pitwall` extraction (**2.1**).
+
+## Poison-message handling (Story 1.9 — NFR4/NFR6, M5)
+
+The consumer-side **DLQ topology** (classic queues — Q&A Round 27) so a bad message is
+**retried then quarantined, never silently dropped or looped forever**:
+
+- **`leaderboard.dlx`** — the consumer's dead-letter exchange (direct), distinct from the
+  `leaderboard.events` heartbeat exchange.
+- **`leaderboard.lap-recorded.retry`** — a no-consumer queue; a failed message is republished
+  here with a **per-message TTL** (exponential backoff `1 s → 2 s → 4 s → 8 s`) and
+  dead-letters back to the work queue when the TTL fires. The retry hop is carried in the
+  `x-pitwall-retry-count` header.
+- **`leaderboard.lap-recorded.parking`** — the **terminal** quarantine (no further requeue).
+  A parked message carries an `x-pitwall-park-reason` header and a structured **alert** log
+  line (`alert=message_parked`) — the Control-Room-bound signal (placeholder until E12).
+
+The work queue is (re)declared with `x-dead-letter-exchange=leaderboard.dlx` as a safety net;
+the classic-queue immutable-args constraint is **self-healed** (delete + redeclare on a `406`).
+The **retry cap (5 attempts) and backoff** are env knobs (below), pinned in **Q&A Round 27** —
+this is **not** the producer-side outbox `quarantined` status (a different failure domain).
+
+### Sad-path table
+
+| Failure | Outcome (graceful, "no computer says no") |
+|---|---|
+| Message fails `/contract` validate-on-consume (bad envelope/data) | **Parked immediately** (`contract-invalid`) + alert — never retried as poison (M5) |
+| Valid envelope, **blank `sessionId`** | **Parked immediately** (`blank-session-id`) — cannot key a read-model |
+| Transient processing failure (DB hiccup, brief peer outage) | **Retried** with exponential backoff; clears within the cap → applied **exactly once** (idempotent inbox) |
+| Persistent processing failure (genuine poison) | Retried to the cap, then **parked** (`retries-exhausted`) + alert — terminated, not looped |
+| Broker hiccup mid-republish (retry/park publish fails) | Original **not acked** → requeued, never lost (NFR6) |
+| Duplicate / replayed message | Inbox no-op, acked (M6) — unchanged |
 
 ## Events
 
@@ -135,6 +166,10 @@ npm run dev        # local dev server, proxies /events to a running leaderboard 
 | `RABBITMQ_VHOST` | `/` | broker vhost |
 | `HTTP_ADDR` | `:8080` | listen addr for the SSE endpoint + embedded SPA |
 | `CONSUME_PREFETCH` | `16` | QoS bound on in-flight unacked deliveries (≥ 1) |
+| `DLQ_MAX_ATTEMPTS` | `5` | total processing attempts before parking (Story 1.9, Q&A Round 27) |
+| `DLQ_RETRY_BASE_MS` | `1000` | first retry-hop delay; hops grow `1s → 2s → 4s → 8s` |
+| `DLQ_RETRY_MULTIPLIER` | `2` | exponential backoff growth factor per hop (≥ 1) |
+| `DLQ_RETRY_MAX_MS` | `60000` | ceiling on any single retry hop's delay (≥ base) |
 | `TIMING_EXCHANGE` | `timing.events` | producer exchange the consumer queue binds to |
 | `HEARTBEAT_INTERVAL_MS` | `1000` | heartbeat period |
 | `LOG_LEVEL` | `info` | `debug\|info\|warn\|error` |

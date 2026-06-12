@@ -17,6 +17,10 @@ type Delivery interface {
 	Body() []byte
 	Ack() error
 	Nack(requeue bool) error
+	// RetryCount is how many times this message has already been retried through
+	// the DLQ (Story 1.9; 0 for a freshly-delivered message). It drives the
+	// backoff/cap decision (domain.NextRetry).
+	RetryCount() int
 }
 
 // amqpDelivery adapts an amqp091 delivery to the Delivery interface.
