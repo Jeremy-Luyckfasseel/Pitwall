@@ -9,6 +9,7 @@ package consumer
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -99,6 +100,9 @@ func (h *Handler) processLap(ctx context.Context, d messaging.Delivery, env mess
 		h.nack(d, false)
 		return
 	}
+	if !h.sessionIDOK(d, env, data.SessionID) {
+		return
+	}
 
 	lap := domain.Lap{
 		MasterID:  data.MasterID,
@@ -124,6 +128,9 @@ func (h *Handler) processSessionStarted(ctx context.Context, d messaging.Deliver
 		h.nack(d, false)
 		return
 	}
+	if !h.sessionIDOK(d, env, data.SessionID) {
+		return
+	}
 	applied, duplicate, err := h.Store.ApplySessionStarted(ctx, env.ID, env.Type, h.now(), data.SessionID, data.StartedAt)
 	if !h.settle(d, env, applied, duplicate, err, "session.started") {
 		return
@@ -141,12 +148,30 @@ func (h *Handler) processSessionEnded(ctx context.Context, d messaging.Delivery,
 		h.nack(d, false)
 		return
 	}
+	if !h.sessionIDOK(d, env, data.SessionID) {
+		return
+	}
 	applied, duplicate, err := h.Store.ApplySessionEnded(ctx, env.ID, env.Type, h.now(), data.SessionID, data.EndedAt)
 	if !h.settle(d, env, applied, duplicate, err, "session.ended") {
 		return
 	}
 	h.Log.Info("session ended", "eventId", env.ID, "sessionId", data.SessionID,
 		"boardChanged", applied, "correlationId", env.CorrelationID)
+}
+
+// sessionIDOK guards the one wire field the read-model keys on that /contract
+// does not length-pin (sessionId has no minLength, unlike masterId's pattern):
+// an empty/blank sessionId would implicit-create a nameless current board, so
+// the event is rejected exactly like an invalid message (logged + nacked
+// without requeue — never applied, never silently dropped).
+func (h *Handler) sessionIDOK(d messaging.Delivery, env messaging.IncomingEnvelope, sessionID string) bool {
+	if strings.TrimSpace(sessionID) != "" {
+		return true
+	}
+	h.Log.Error("rejecting "+env.Type+" with empty sessionId", "eventId", env.ID,
+		"correlationId", env.CorrelationID)
+	h.nack(d, false)
+	return false
 }
 
 // settle is the shared ack/nack + notify discipline: a transient store error

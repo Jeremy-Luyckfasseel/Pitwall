@@ -298,6 +298,36 @@ func TestProcess_InvalidSessionStarted_NotAppliedNackedNoRequeue(t *testing.T) {
 	}
 }
 
+// Review fix: an EMPTY sessionId passes /contract validation (no minLength is
+// pinned on the wire) but cannot key a read-model — it is rejected like an
+// invalid message on all three paths, never implicit-creating a blank board.
+func TestProcess_EmptySessionID_RejectedNotApplied(t *testing.T) {
+	cases := map[string]string{
+		"lap.recorded":    `{"id":"55555555-5555-7555-8555-555555555551","type":"lap.recorded","source":"timing","schemaVersion":1,"envelopeVersion":1,"occurredAt":"2026-06-08T10:00:01.000Z","correlationId":"8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55","causationId":null,"data":{"masterId":"1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21","sessionId":"","lapNumber":3,"lapTimeMs":42000,"at":"2026-06-08T10:00:01.000Z","transponderId":null}}`,
+		"session.started": `{"id":"55555555-5555-7555-8555-555555555552","type":"session.started","source":"timing","schemaVersion":1,"envelopeVersion":1,"occurredAt":"2026-06-08T10:00:00.000Z","correlationId":"8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55","causationId":null,"data":{"sessionId":"","startedAt":"2026-06-08T10:00:00.000Z"}}`,
+		"session.ended":   `{"id":"55555555-5555-7555-8555-555555555553","type":"session.ended","source":"timing","schemaVersion":1,"envelopeVersion":1,"occurredAt":"2026-06-08T10:20:00.000Z","correlationId":"8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55","causationId":null,"data":{"sessionId":"","endedAt":"2026-06-08T10:20:00.000Z","summary":[]}}`,
+	}
+	for typ, body := range cases {
+		h, store, notify := newHandler(t)
+		d := &fakeDelivery{body: []byte(body)}
+
+		h.Process(context.Background(), d)
+
+		if d.acked {
+			t.Errorf("%s with empty sessionId must NOT be acked", typ)
+		}
+		if !d.nacked || d.requeue {
+			t.Errorf("%s with empty sessionId: nacked=%v requeue=%v, want nacked no-requeue", typ, d.nacked, d.requeue)
+		}
+		if b := currentBoard(t, store); b != nil {
+			t.Errorf("%s with empty sessionId must not create a board: %+v", typ, b)
+		}
+		if *notify != 0 {
+			t.Errorf("%s with empty sessionId must not notify", typ)
+		}
+	}
+}
+
 // AC3: a lap arriving BEFORE its session.started routes its sessionId into the
 // store and starts the implicit board (the consumer threads sessionId through).
 func TestProcess_LapBeforeStart_ImplicitBoard(t *testing.T) {
