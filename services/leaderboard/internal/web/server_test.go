@@ -146,6 +146,36 @@ func TestSSE_SessionChangePushed(t *testing.T) {
 	}
 }
 
+// Review fix: a slow client whose buffer is full must lose the OLDEST frame,
+// never the newest — a terminal session-finished snapshot may be the last push
+// ever and has to survive the overflow.
+func TestHub_OverflowKeepsNewestFrame(t *testing.T) {
+	h := newHub()
+	ch := h.add()
+	defer h.remove(ch)
+
+	var last []byte
+	for i := 0; i < cap(ch)+4; i++ {
+		last = []byte{byte('a' + i)}
+		h.broadcast(last)
+	}
+
+	var newestSeen bool
+	for {
+		select {
+		case b := <-ch:
+			if string(b) == string(last) {
+				newestSeen = true
+			}
+		default:
+			if !newestSeen {
+				t.Fatal("the newest frame was dropped on overflow; oldest must be evicted instead")
+			}
+			return
+		}
+	}
+}
+
 // The static route fails gracefully (clear status) when the SPA bundle is not
 // built (only the .gitkeep placeholder is embedded in the Go-only CI build).
 func TestStaticRoot_DegradesGracefullyWithoutBundle(t *testing.T) {

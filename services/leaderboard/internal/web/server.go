@@ -129,9 +129,10 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 }
 
 // hub fans broadcasts out to all connected SSE clients. Each client has a small
-// buffered channel; a slow client that can't keep up simply misses an
-// intermediate frame — the next full snapshot supersedes it (no blocking, no
-// unbounded growth).
+// buffered channel; a slow client that can't keep up loses the OLDEST queued
+// frame, never the newest (no blocking, no unbounded growth). Keep-latest
+// matters since Story 1.8: a session-finished flip may be the LAST push for a
+// long time — dropping it would freeze a stale status on a healthy connection.
 type hub struct {
 	mu      sync.Mutex
 	clients map[chan []byte]struct{}
@@ -162,7 +163,17 @@ func (h *hub) broadcast(b []byte) {
 	for ch := range h.clients {
 		select {
 		case ch <- b:
-		default: // client is behind; drop this frame (the next snapshot supersedes)
+		default:
+			// Buffer full: evict the oldest frame to make room for this one
+			// (each frame is a FULL snapshot, so only the newest matters).
+			select {
+			case <-ch:
+			default:
+			}
+			select {
+			case ch <- b:
+			default: // reader raced us and refilled; it is actively draining anyway
+			}
 		}
 	}
 }
