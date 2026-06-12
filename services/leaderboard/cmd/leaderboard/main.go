@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -123,13 +124,21 @@ func run() int {
 	// The live board: serves the embedded SPA + pushes standings over SSE. The
 	// snapshot func reads the CURRENT session's board on demand (the board owns
 	// no state; the auto-reset IS this read switching to the newest session).
+	// On a transient read error it serves the LAST-KNOWN-GOOD snapshot instead
+	// of the waiting state — a DB hiccup must never visibly wipe a live board
+	// (session:null is reserved for "no session ever seen").
+	var snapMu sync.Mutex
+	lastGood := web.ToSnapshot(nil)
 	snapshot := func() web.Snapshot {
 		b, serr := store.CurrentBoard(context.Background())
+		snapMu.Lock()
+		defer snapMu.Unlock()
 		if serr != nil {
-			log.Error("failed to read the current board for snapshot", "error", serr.Error())
-			return web.Snapshot{Rows: []web.RowView{}}
+			log.Error("failed to read the current board for snapshot; serving last-known-good", "error", serr.Error())
+			return lastGood
 		}
-		return web.ToSnapshot(b) // nil board = no session ever seen (waiting state)
+		lastGood = web.ToSnapshot(b) // nil board = no session ever seen (waiting state)
+		return lastGood
 	}
 	server := web.NewServer(cfg.HTTPAddr, snapshot, log)
 
