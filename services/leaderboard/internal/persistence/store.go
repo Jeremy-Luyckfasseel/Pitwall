@@ -187,43 +187,53 @@ func (s *Store) ApplySessionEnded(ctx context.Context, envelopeID, eventType, pr
 
 // CurrentBoard returns the latest-first-seen session (MAX(epoch)) with its
 // ordered bests (best lap asc, earliest-set, ingest seq — the same order
-// contract the 1.7 AllBests had, now per session). A fresh database with no
-// session yet returns (nil, nil) — the board renders its waiting state.
+// contract the 1.7 AllBests had, now per session). Both reads run in ONE
+// transaction so the served session/standings pair is consistent (a consume
+// committing between them cannot pair a stale status with newer rows). A fresh
+// database with no session yet returns (nil, nil) — the waiting state.
 func (s *Store) CurrentBoard(ctx context.Context) (*Board, error) {
 	var b Board
-	var startedAt, endedAt sql.NullString
-	err := s.db.QueryRowContext(ctx,
-		`SELECT session_id, status, started_at, ended_at
-		   FROM sessions
-		  ORDER BY epoch DESC
-		  LIMIT 1`).Scan(&b.SessionID, &b.Status, &startedAt, &endedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("query current session: %w", err)
-	}
-	b.StartedAt = startedAt.String
-	b.EndedAt = endedAt.String
-
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT master_id, best_lap_ms, best_lap_at, best_lap_seq
-		   FROM standings
-		  WHERE session_id = ?
-		  ORDER BY best_lap_ms ASC, best_lap_at ASC, best_lap_seq ASC`, b.SessionID)
-	if err != nil {
-		return nil, fmt.Errorf("query standings: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var d domain.DriverBest
-		if err := rows.Scan(&d.MasterID, &d.BestLapMs, &d.BestLapAt, &d.BestLapSeq); err != nil {
-			return nil, fmt.Errorf("scan standings row: %w", err)
+	none := false
+	err := WithinTx(ctx, s.db, func(tx *sql.Tx) error {
+		var startedAt, endedAt sql.NullString
+		err := tx.QueryRowContext(ctx,
+			`SELECT session_id, status, started_at, ended_at
+			   FROM sessions
+			  ORDER BY epoch DESC
+			  LIMIT 1`).Scan(&b.SessionID, &b.Status, &startedAt, &endedAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			none = true
+			return nil
 		}
-		b.Bests = append(b.Bests, d)
-	}
-	if err := rows.Err(); err != nil {
+		if err != nil {
+			return fmt.Errorf("query current session: %w", err)
+		}
+		b.StartedAt = startedAt.String
+		b.EndedAt = endedAt.String
+
+		rows, err := tx.QueryContext(ctx,
+			`SELECT master_id, best_lap_ms, best_lap_at, best_lap_seq
+			   FROM standings
+			  WHERE session_id = ?
+			  ORDER BY best_lap_ms ASC, best_lap_at ASC, best_lap_seq ASC`, b.SessionID)
+		if err != nil {
+			return fmt.Errorf("query standings: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var d domain.DriverBest
+			if err := rows.Scan(&d.MasterID, &d.BestLapMs, &d.BestLapAt, &d.BestLapSeq); err != nil {
+				return fmt.Errorf("scan standings row: %w", err)
+			}
+			b.Bests = append(b.Bests, d)
+		}
+		return rows.Err()
+	})
+	if err != nil {
 		return nil, err
+	}
+	if none {
+		return nil, nil
 	}
 	return &b, nil
 }

@@ -2,6 +2,8 @@ package persistence
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -23,12 +25,17 @@ func lap(master string, ms int64, at string, seq int64) domain.Lap {
 	return domain.Lap{MasterID: master, LapTimeMs: ms, At: at, Seq: seq}
 }
 
-// board is a test helper: CurrentBoard must never error in these scenarios.
+// board is a test helper: CurrentBoard must never error NOR be nil in these
+// scenarios (fatal on nil so failing tests report instead of nil-panicking;
+// the legitimate-nil case is covered by TestCurrentBoard_Empty_NilBoard).
 func board(t *testing.T, s *Store) *Board {
 	t.Helper()
 	b, err := s.CurrentBoard(context.Background())
 	if err != nil {
 		t.Fatalf("CurrentBoard: %v", err)
+	}
+	if b == nil {
+		t.Fatal("CurrentBoard returned nil; a session was expected")
 	}
 	return b
 }
@@ -374,6 +381,45 @@ func TestMaxSeq(t *testing.T) {
 	_, _, _ = s.ApplyLap(ctx, "id-2", "lap.recorded", "t2", "s2", lap("b", 41000, "2026-06-08T10:00:02.000Z", 9))
 	if got, err := s.MaxSeq(ctx); err != nil || got != 9 {
 		t.Errorf("MaxSeq = %d, %v; want 9, nil", got, err)
+	}
+}
+
+// The atomic-consume contract every Apply* relies on: an error inside the
+// transaction rolls EVERYTHING back — a crash mid-apply can neither
+// apply-without-marking nor mark-without-applying (NFR6).
+func TestWithinTx_RollsBackEverythingOnError(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "lb.db")
+	db, err := Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+
+	boom := errors.New("boom")
+	err = WithinTx(ctx, db, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO inbox (id, type, processed_at) VALUES ('ev-x', 'lap.recorded', 't1')`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO sessions (session_id, epoch, status) VALUES ('s1', 1, 'active')`); err != nil {
+			return err
+		}
+		return boom // simulated failure AFTER both writes
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("WithinTx error = %v, want the injected failure", err)
+	}
+
+	for _, table := range []string{"inbox", "sessions", "standings"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if n != 0 {
+			t.Errorf("%s has %d rows after a rolled-back tx, want 0", table, n)
+		}
 	}
 }
 

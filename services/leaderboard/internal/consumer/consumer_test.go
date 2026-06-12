@@ -337,7 +337,7 @@ func TestProcess_LapBeforeStart_ImplicitBoard(t *testing.T) {
 
 	b := currentBoard(t, store)
 	if b == nil || b.SessionID != "s1" || b.Status != persistence.StatusImplicit {
-		t.Errorf("board = %+v, want implicit s1 (lap's sessionId threaded through)", b)
+		t.Fatalf("board = %+v, want implicit s1 (lap's sessionId threaded through)", b)
 	}
 	if len(b.Bests) != 1 {
 		t.Errorf("the early lap must land on the implicit board: %+v", b.Bests)
