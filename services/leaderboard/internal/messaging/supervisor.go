@@ -23,6 +23,14 @@ type backoffPolicy struct {
 	max  time.Duration
 }
 
+// defaultBackoff is the reconnect schedule: start at 500 ms and double up to a
+// 5 s ceiling (the same ceiling the outbox relay uses — relay.go maxBackoff).
+// Reconnect backoff is not a confirm-at-build knob, so a documented default is
+// allowed (epics.md:399).
+func defaultBackoff() backoffPolicy {
+	return backoffPolicy{base: 500 * time.Millisecond, max: 5 * time.Second}
+}
+
 func (p backoffPolicy) next(cur time.Duration) time.Duration {
 	n := cur * 2
 	if n > p.max {

@@ -48,26 +48,34 @@ type ConsumerOptions struct {
 // 1.9 will REDECLARE this queue with x-dead-letter-exchange args (RabbitMQ
 // cannot mutate queue args in place), a deliberate seam, see the story Dev Notes.
 func (b *Bus) DeclareConsumerQueue(opts ConsumerOptions) error {
-	if err := b.ch.ExchangeDeclare(opts.SourceExchange, "topic", true, false, false, false, nil); err != nil {
+	ch := b.curCh()
+	if ch == nil {
+		return errChannelGone
+	}
+	if err := ch.ExchangeDeclare(opts.SourceExchange, "topic", true, false, false, false, nil); err != nil {
 		return err
 	}
-	if _, err := b.ch.QueueDeclare(opts.QueueName, true, false, false, false, nil); err != nil {
+	if _, err := ch.QueueDeclare(opts.QueueName, true, false, false, false, nil); err != nil {
 		return err
 	}
 	for _, key := range opts.RoutingKeys {
-		if err := b.ch.QueueBind(opts.QueueName, key, opts.SourceExchange, false, nil); err != nil {
+		if err := ch.QueueBind(opts.QueueName, key, opts.SourceExchange, false, nil); err != nil {
 			return err
 		}
 	}
 	// Per-consumer prefetch; global=false.
-	return b.ch.Qos(opts.Prefetch, 0, false)
+	return ch.Qos(opts.Prefetch, 0, false)
 }
 
 // Consume starts a manual-ack consumer on the queue and returns a channel of
 // broker-agnostic deliveries. autoAck is false: the caller acks only AFTER the
 // state change is durably committed (NFR6).
 func (b *Bus) Consume(queueName string) (<-chan Delivery, error) {
-	raw, err := b.ch.Consume(queueName, "", false, false, false, false, nil)
+	ch := b.curCh()
+	if ch == nil {
+		return nil, errChannelGone
+	}
+	raw, err := ch.Consume(queueName, "", false, false, false, false, nil)
 	if err != nil {
 		return nil, err
 	}
