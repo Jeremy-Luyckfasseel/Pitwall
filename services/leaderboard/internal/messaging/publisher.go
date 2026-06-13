@@ -139,6 +139,10 @@ func (b *Bus) ConnectAndConsume(ctx context.Context, opts ConsumerOptions, log *
 			return nil, err
 		}
 		if err := subscribe(); err != nil {
+			// The connection established above but topology/subscribe failed: close
+			// it so we don't leak a socket + its NotifyClose goroutine when the
+			// supervisor backs off and re-dials a fresh connection.
+			_ = b.Close()
 			return nil, err
 		}
 		return closed, nil

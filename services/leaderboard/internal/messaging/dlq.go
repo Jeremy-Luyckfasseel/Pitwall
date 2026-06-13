@@ -146,7 +146,13 @@ func (b *Bus) DeclareDLQTopology(opts ConsumerOptions) error {
 			return err
 		}
 	}
+	// Set the DLX name under the lock: DeclareDLQTopology runs on the supervisor
+	// goroutine (re-run on every reconnect) while PublishToDLX reads b.dlx on the
+	// Handler goroutine — guard the write so the two never race (the value is the
+	// same constant, but an unsynchronized string read/write is a data race).
+	b.mu.Lock()
 	b.dlx = LeaderboardDLXExchange
+	b.mu.Unlock()
 	return ch.Qos(opts.Prefetch, 0, false)
 }
 
@@ -209,11 +215,14 @@ func isPreconditionFailed(err error) bool {
 // expirationMs is 0 and parkReason records why. Manual-ack discipline: the
 // caller acks the ORIGINAL delivery only after this republish succeeds.
 func (b *Bus) PublishToDLX(ctx context.Context, routingKey string, body []byte, expirationMs, retryCount int, parkReason string) error {
-	ch := b.curCh()
+	b.mu.RLock()
+	ch := b.ch
+	dlx := b.dlx
+	b.mu.RUnlock()
 	if ch == nil {
 		return errChannelGone
 	}
-	return ch.PublishWithContext(ctx, b.dlx, routingKey, false, false,
+	return ch.PublishWithContext(ctx, dlx, routingKey, false, false,
 		buildDLXPublishing(body, expirationMs, retryCount, parkReason))
 }
 

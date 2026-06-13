@@ -105,27 +105,36 @@ func TestLeaderboardReconnectsStaleFlagAndConverges(t *testing.T) {
 	startBrokerAgainC(t, c)
 	waitUntil(t, "consumer reconnected, stale flag cleared", func() bool { return !snapshot().Stale })
 
-	// Now publish the second half; the board must reconverge within 10 s.
+	// Now publish the second half PLUS an IMPROVEMENT lap for driver 0 (a faster
+	// lap than its first-half time). The fold must reflect every buffered lap, so
+	// the post-reconnect improvement must actually change driver 0's best — proving
+	// "every buffered lap reflected, ordering correct" (AC2), not just a count.
+	improve := lapFix{master: heat[0].master, lapMs: heat[0].lapMs - 1500, at: "2026-06-08T10:00:30.000Z"}
+	all := append(append([]lapFix{}, heat...), improve)
 	pub2 := dialPublisher(t, amqpURL)
 	for _, l := range heat[5:] {
 		pub2.lap(t, uuid.NewString(), l.master, l.lapMs, l.at, session)
 	}
+	pub2.lap(t, uuid.NewString(), improve.master, improve.lapMs, improve.at, session)
 	_ = pub2.close()
 
+	want := foldExpected(all)                    // driver 0 best is now the improvement time
 	deadline := time.Now().Add(10 * time.Second) // M9: ≤10 s reconverge
 	for {
-		if boardSize(t, store, session) == len(heat) && !snapshot().Stale {
+		if boardSize(t, store, session) == len(heat) && driverBest(t, store, session, heat[0].master) == want[heat[0].master] && !snapshot().Stale {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("did not reconverge within 10s: boardSize=%d stale=%v", boardSize(t, store, session), snapshot().Stale)
+			t.Fatalf("did not reconverge within 10s: boardSize=%d driver0Best=%d stale=%v",
+				boardSize(t, store, session), driverBest(t, store, session, heat[0].master), snapshot().Stale)
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
 	_ = busConnected
 
-	// --- convergence predicate: CurrentBoard == fold(the fixed sequence).
-	assertConverged(t, store, session, heat)
+	// --- convergence predicate: CurrentBoard == fold(every published lap), with
+	// the post-reconnect improvement reflected.
+	assertConverged(t, store, session, all)
 	assertServedStale(t, ts.URL, false) // flag cleared on the served stream
 }
 
@@ -285,6 +294,25 @@ func boardSize(t *testing.T, store *persistence.Store, session string) int {
 		return 0
 	}
 	return len(b.Bests)
+}
+
+// driverBest returns a driver's current best lap (ms) on the board, or -1 if the
+// driver is absent.
+func driverBest(t *testing.T, store *persistence.Store, session, master string) int64 {
+	t.Helper()
+	b, err := store.CurrentBoard(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentBoard: %v", err)
+	}
+	if b == nil || b.SessionID != session {
+		return -1
+	}
+	for _, db := range b.Bests {
+		if db.MasterID == master {
+			return db.BestLapMs
+		}
+	}
+	return -1
 }
 
 // assertConverged checks the convergence predicate: the served read-model equals
