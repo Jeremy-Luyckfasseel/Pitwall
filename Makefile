@@ -2,7 +2,7 @@
 # Targets grow as the platform does (walking-skeleton-first). Recipes are POSIX sh; run on
 # Linux / macOS / WSL / git-bash (the CI runners and the VPS).
 .DEFAULT_GOAL := help
-.PHONY: help up down clean logs contract-test contract test smoke
+.PHONY: help up down clean logs contract-test contract test smoke smoke-quarantine
 
 help: ## Show this help
 	@echo "Pitwall make targets:"
@@ -50,5 +50,8 @@ test: ## Per-service tests. Timing (Go): unit always; integration (real RabbitMQ
 	cd services/timing && go build ./... && go vet ./... && go test ./...
 	@echo "Integration tests (need Docker): cd services/timing && go test -tags=integration ./test/integration/..."
 
-smoke: ## (placeholder) Cross-language e2e smoke — built in Story 1.11
-	@echo "make smoke: nothing to run yet — the e2e smoke is built in Story 1.11."
+smoke: ## Cross-language conformance harness + e2e smoke — REQUIRED lane (real binaries + real RabbitMQ via testcontainers; needs Docker)
+	cd tests/conformance/go && go test -tags=integration -timeout 900s ./...
+
+smoke-quarantine: ## Conformance QUARANTINE lane — flaky scenarios, non-blocking (AR16: quarantine, never @skip)
+	cd tests/conformance/go && CONFORMANCE_LANE=quarantine go test -tags=integration -timeout 900s ./...

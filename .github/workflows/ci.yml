@@ -19,6 +19,7 @@ jobs:
       contract: ${{ steps.filter.outputs.contract }}
       services: ${{ steps.filter.outputs.services }}
       libs: ${{ steps.filter.outputs.libs }}
+      e2e: ${{ steps.filter.outputs.e2e }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -37,6 +38,13 @@ jobs:
               - 'contract/**'   # a contract change rebuilds every consumer (fan-out)
               - 'libs/**'
             libs:
+              - 'libs/**'
+            e2e:
+              # The conformance harness drives the real service binaries against the
+              # real contract, so a change to any of them re-runs the e2e smoke (AR17 fan-out).
+              - 'tests/conformance/**'
+              - 'services/**'
+              - 'contract/**'
               - 'libs/**'
 
   schema-lint:
@@ -142,6 +150,53 @@ jobs:
         run: go test ./...
       - name: Integration tests (real RabbitMQ via testcontainers)
         run: go test -tags=integration -timeout 300s ./test/integration/...
+
+  e2e-smoke:
+    # The 4th test layer (NFR23): the cross-language conformance harness + e2e smoke.
+    # A thin Go runner (tests/conformance/go) drives the REAL built service binaries
+    # (Timing simulator + Leaderboard) against ONE shared real RabbitMQ (testcontainers),
+    # running the scenarios/*.yaml spec (smoke + publish-redeliver/inbox-dup/crash-after-ack/
+    # peer-down). This is the REQUIRED merge gate — it runs the non-quarantined lane.
+    # No Docker image build (that is release.yml, Story 1.12); ubuntu runners ship Docker.
+    needs: changes
+    if: ${{ needs.changes.outputs.e2e == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests/conformance/go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+          cache-dependency-path: tests/conformance/go/go.sum
+      - name: Unit tests (loader + lane filter, broker-free)
+        run: go test ./...
+      - name: Conformance + e2e smoke (required lane — real binaries + real RabbitMQ)
+        run: go test -tags=integration -timeout 900s ./...
+
+  e2e-smoke-quarantine:
+    # The quarantine lane (AR16: a flaky scenario goes here, NEVER @skip). It STILL
+    # RUNS the quarantined scenarios but does not block the merge (continue-on-error).
+    # For Epic 1 this lane is empty (zero quarantined scenarios) — the job exists so a
+    # future flaky scenario has a defined, non-blocking home instead of being skipped.
+    needs: changes
+    if: ${{ needs.changes.outputs.e2e == 'true' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: tests/conformance/go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+          cache-dependency-path: tests/conformance/go/go.sum
+      - name: Conformance quarantine lane (non-blocking)
+        env:
+          CONFORMANCE_LANE: quarantine
+        run: go test -tags=integration -timeout 900s ./...
 
   conventional-commits:
     # Conventional Commits gate the squash merge; enforce on PRs (the PR commits / title).

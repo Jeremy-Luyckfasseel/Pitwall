@@ -1,0 +1,20 @@
+name: smoke
+title: Happy-path e2e smoke — simulated laps populate the board, then the session ends
+description: >
+  The check-in-less walking-skeleton flow (AR15/AR16, NFR23): the REAL Timing
+  binary in simulator mode (seed-deterministic) emits session.started -> N drivers
+  worth of lap.recorded -> session.ended; the REAL Leaderboard binary consumes
+  them and serves a live board. The harness asserts, over the Leaderboard SSE
+  stream, that the board converges to N drivers ranked by best lap (ascending)
+  and that the session status flips to "finished" when the session ends. This is
+  the required merge gate (AC2/AC3).
+proves: [M3, M7]
+quarantine: false
+simulator:
+  drivers: 4
+  sessionLaps: 2
+  seed: 1111
+expect:
+  boardDrivers: 4
+  rankedAscending: true
+  sessionFinished: true

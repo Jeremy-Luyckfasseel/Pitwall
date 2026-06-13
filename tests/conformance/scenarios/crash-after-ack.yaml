@@ -1,0 +1,31 @@
+name: crash-after-ack
+title: Consumer crash after ack — replay past the marker, no double-count, no loss
+description: >
+  The harness publishes a deterministic lap fixture; the REAL Leaderboard binary
+  consumes and acks some of it (durable read-model + inbox marker advance). The
+  Leaderboard PROCESS is then killed and restarted on the SAME database. On
+  restart it must rebuild from its durable read-model and replay only the unacked
+  tail — the idempotent inbox makes any redelivered already-applied lap a no-op.
+  The served board must converge to every unique lap exactly once, with no
+  double-count and no loss (M4 replay recovery, M6 zero duplicate side-effect).
+proves: [M4, M6]
+quarantine: false
+fixture:
+  session: conf-crash-after-ack
+  laps:
+    - { master: "00000c01-3e84-4d11-9aa2-7b6c5e4d3f21", lapMs: 42000 }
+    - { master: "00000c02-3e84-4d11-9aa2-7b6c5e4d3f21", lapMs: 41500 }
+    - { master: "00000c03-3e84-4d11-9aa2-7b6c5e4d3f21", lapMs: 42250 }
+    - { master: "00000c04-3e84-4d11-9aa2-7b6c5e4d3f21", lapMs: 41750 }
+  # Publish + apply the first 2 laps, then KILL + restart the Leaderboard process
+  # on the same DB. After restart, publish the rest AND republish laps[0]'s id with
+  # a faster time. The durable read-model + inbox marker must survive the crash:
+  # every driver appears (no loss, M4) and laps[0] keeps 42000 (dedupe survived
+  # the restart, M6).
+  ackedBeforeCrash: 2
+  duplicateIndex: 0
+  duplicateLapMs: 39000
+expect:
+  boardDrivers: 4
+  rankedAscending: true
+  sessionFinished: false
