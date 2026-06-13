@@ -14,6 +14,7 @@
   --accent: #ff8400;
   --accent-text: #140a00;
   --success: #4ed694;
+  --warning: #ffce4d;
   --focus-ring: #f4ede2;
 
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -77,6 +78,32 @@ body {
 }
 .status-pill--finished {
   color: var(--text-muted);
+}
+/*
+ * reconnecting (Story 1.10 / FR47, C1): the calm WARNING state shown when the
+ * bus is down and the board is frozen on last-known standings. Amber, never red;
+ * a leading dot + the text label (never color alone) — honest, not faked-live.
+ */
+.status-pill--reconnecting {
+  color: var(--warning);
+}
+.status-pill--reconnecting::before {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin-right: 0.4em;
+  border-radius: 999px;
+  background: currentColor;
+  vertical-align: baseline;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-pill--reconnecting::before { animation: none; }
 }
 
 .standings {

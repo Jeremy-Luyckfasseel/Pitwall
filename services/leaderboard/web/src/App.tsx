@@ -18,6 +18,11 @@ interface SessionView {
 interface Snapshot {
   session: SessionView | null;
   rows: RowView[];
+  // Bus-connection state (Story 1.10): when the leaderboard's broker connection
+  // is down the board freezes on last-known standings and flags stale —
+  // honest degradation (FR47, C1), never faked-live.
+  stale?: boolean;
+  connection?: string;
 }
 
 // App subscribes to /events (Server-Sent Events) and re-renders the standings in
@@ -29,6 +34,7 @@ interface Snapshot {
 export function App() {
   const [session, setSession] = useState<SessionView | null>(null);
   const [rows, setRows] = useState<RowView[]>([]);
+  const [stale, setStale] = useState(false);
 
   useEffect(() => {
     const source = new EventSource("/events");
@@ -37,6 +43,7 @@ export function App() {
         const snap: Snapshot = JSON.parse(e.data);
         setSession(snap.session ?? null);
         setRows(snap.rows ?? []);
+        setStale(snap.stale === true);
       } catch {
         // Ignore a malformed frame; the next snapshot supersedes it.
       }
@@ -48,17 +55,25 @@ export function App() {
     <main className="board">
       <header className="board__header">
         <h1 className="board__title">Live Standings</h1>
-        {session && (
-          <span
-            className={
-              "status-pill mono" +
-              (session.status === "finished"
-                ? " status-pill--finished"
-                : " status-pill--active")
-            }
-          >
-            {session.status}
+        {stale ? (
+          // Bus down: freeze on last-known, flag reconnecting (calm warning,
+          // never faked-live). Announced politely for assistive tech.
+          <span className="status-pill mono status-pill--reconnecting" role="status" aria-live="polite">
+            Showing last-known · reconnecting…
           </span>
+        ) : (
+          session && (
+            <span
+              className={
+                "status-pill mono" +
+                (session.status === "finished"
+                  ? " status-pill--finished"
+                  : " status-pill--active")
+              }
+            >
+              {session.status}
+            </span>
+          )
         )}
       </header>
       <ol className="standings" aria-label="Live race standings" aria-live="polite">

@@ -32,11 +32,38 @@ type SessionView struct {
 	Status    string `json:"status"`
 }
 
+// Connection-state labels carried on the served bundle (Story 1.10). "live" when
+// this service is consuming off the bus; "reconnecting" when its broker
+// connection is down and the board is frozen on last-known standings. Honest
+// degradation (C1): flagged stale, never faked live.
+const (
+	ConnectionLive         = "live"
+	ConnectionReconnecting = "reconnecting"
+)
+
 // Snapshot is the full board state pushed over SSE. Session is null only before
-// any session has ever been seen (the SPA's waiting state).
+// any session has ever been seen (the SPA's waiting state). Stale/Connection
+// carry the bus-connection state so the trackside board can flag a bus-down with
+// the calm warning pill instead of presenting stale data as live (FR47, C1).
 type Snapshot struct {
-	Session *SessionView `json:"session"`
-	Rows    []RowView    `json:"rows"`
+	Session    *SessionView `json:"session"`
+	Rows       []RowView    `json:"rows"`
+	Stale      bool         `json:"stale"`
+	Connection string       `json:"connection"`
+}
+
+// WithConnection stamps the bus-connection state onto the bundle without touching
+// the board: a disconnected board still serves its last-known session + rows,
+// only flagged stale/reconnecting (the board freezes on last-known, FR47).
+func (s Snapshot) WithConnection(connected bool) Snapshot {
+	if connected {
+		s.Stale = false
+		s.Connection = ConnectionLive
+		return s
+	}
+	s.Stale = true
+	s.Connection = ConnectionReconnecting
+	return s
 }
 
 // ToSnapshot maps the current session's board (nil when no session has ever
