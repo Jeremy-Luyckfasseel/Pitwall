@@ -1,0 +1,24 @@
+name: peer-down
+title: A peer (the bus) goes down mid-session — buffer, no loss, reconverge on restore
+description: >
+  With the REAL Timing (simulator) producing and the REAL Leaderboard consuming,
+  the shared broker is STOPPED mid-session. Timing must buffer new laps in its
+  transactional outbox (no crash, no loss) and the served board must freeze on
+  its last-known standings flagged stale (Story 1.10 in-service guarantee, here
+  proven across the real-binary seam). On restore, Timing flushes and the board
+  reconverges to every lap emitted — including those produced while the bus was
+  down (M3 zero lap loss, M9 reconverge).
+proves: [M3, M9]
+quarantine: false
+simulator:
+  drivers: 3
+  sessionLaps: 8
+  seed: 2222
+  # Pace slowly so the session SPANS the bus kill — laps must still be in flight
+  # when the broker is stopped, so they are genuinely buffered in Timing's outbox
+  # during the outage (a fast tick would drain the whole session before the kill).
+  tickMs: 300
+expect:
+  boardDrivers: 3
+  rankedAscending: true
+  sessionFinished: false

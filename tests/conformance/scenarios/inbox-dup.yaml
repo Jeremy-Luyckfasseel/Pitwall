@@ -1,0 +1,24 @@
+name: inbox-dup
+title: Idempotent inbox dedupes a duplicate lap.recorded (same envelope id)
+description: >
+  The harness (acting as the producer) publishes a deterministic lap fixture to
+  the timing.events exchange, then republishes one lap under the SAME envelope id.
+  The REAL Leaderboard binary must treat the duplicate as a no-op — the idempotent
+  inbox dedupes on envelope id — so the served board shows exactly the UNIQUE laps
+  with no double-count (M6, zero duplicate side-effect).
+proves: [M6]
+quarantine: false
+fixture:
+  session: conf-inbox-dup
+  laps:
+    - { master: "00000a01-3e84-4d11-9aa2-7b6c5e4d3f21", lapMs: 41000 }
+    - { master: "00000a02-3e84-4d11-9aa2-7b6c5e4d3f21", lapMs: 41250 }
+    - { master: "00000a03-3e84-4d11-9aa2-7b6c5e4d3f21", lapMs: 40750 }
+  duplicateIndex: 0
+  # Republish laps[0]'s envelope id with a FASTER time. Dedupe-by-id must keep the
+  # original 41000 on the board — the faster 38000 is a no-op (M6).
+  duplicateLapMs: 38000
+expect:
+  boardDrivers: 3
+  rankedAscending: true
+  sessionFinished: false

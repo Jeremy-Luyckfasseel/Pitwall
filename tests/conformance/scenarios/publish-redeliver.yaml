@@ -1,0 +1,27 @@
+name: publish-redeliver
+title: A redelivered (persistent) lap.recorded is applied exactly once
+description: >
+  The harness publishes a deterministic lap fixture (persistent messages) to the
+  timing.events exchange; the REAL Leaderboard binary consumes them. The broker is
+  then bounced (state-preserving stop/start), which redelivers any persistent
+  messages that were in flight, and the harness republishes the fixture to force a
+  redelivery path. The served board must remain correct EXACTLY ONCE — durable
+  work queue + manual ack + idempotent inbox guarantee no double-count on
+  redelivery (M6).
+proves: [M4, M6]
+quarantine: false
+fixture:
+  session: conf-publish-redeliver
+  laps:
+    - { master: "00000b01-3e84-4d11-9aa2-7b6c5e4d3f21", lapMs: 39800 }
+    - { master: "00000b02-3e84-4d11-9aa2-7b6c5e4d3f21", lapMs: 40100 }
+  duplicateIndex: 0
+  # After a state-preserving broker bounce (persistent messages survive), the
+  # harness republishes laps[0]'s envelope id with a FASTER time. The durable
+  # work queue + idempotent inbox must keep the original 39800 — proving the
+  # redelivery path applies a persistent message exactly once (M4 + M6).
+  duplicateLapMs: 37000
+expect:
+  boardDrivers: 2
+  rankedAscending: true
+  sessionFinished: false
