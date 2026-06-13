@@ -109,6 +109,31 @@ this is **not** the producer-side outbox `quarantined` status (a different failu
 | Persistent processing failure (genuine poison) | Retried to the cap, then **parked** (`retries-exhausted`) + alert — terminated, not looped |
 | Broker hiccup mid-republish (retry/park publish fails) | Original **not acked** → requeued, never lost (NFR6) |
 | Duplicate / replayed message | Inbox no-op, acked (M6) — unchanged |
+| **Mid-session bus kill** (RabbitMQ down) | Board **freezes on last-known**, served bundle flips **stale/reconnecting**; consumer re-dials with backoff — no crash, no fakery (FR47/C1) |
+| **Bus restored** | Consumer reconnects, **stale flag clears**, board **reconverges ≤ 10 s** (M9) |
+| **Service (process) restart** | Durable read-model + idempotent inbox replay past the marker — **no double-count (M6), no loss (M4)** |
+
+## Bus-outage behaviour (Story 1.10 — FR47/C1, NFR1/NFR2/NFR5/NFR10, M4/M6/M9)
+
+The board **degrades honestly** through a mid-session RabbitMQ outage — flagged stale, never
+faked live:
+
+- **On a bus kill**, the consumer's broker connection drops. amqp091-go does **not** auto-recover,
+  so a built-in **reconnect supervisor** detects the drop and re-dials with capped-exponential
+  backoff (500 ms → 5 s ceiling), re-declares the exchange + DLQ topology and re-subscribes —
+  pumping deliveries into a **stable channel** so the consumer never restarts. While down, the
+  served SSE bundle carries **`stale:true` / `connection:"reconnecting"`** and the board **freezes
+  on last-known standings** (no wipe, no crash). The trackside SPA shows the calm amber
+  *"Showing last-known · reconnecting…"* pill (dot + text, never color alone, reduced-motion-safe).
+- **On restore**, the supervisor reconnects, the stale flag clears, and the board **reconverges
+  within ≤ 10 s** of broker-ready: `Leaderboard.read_model == fold(Timing.event_store)` for the
+  session (every lap reflected, ordering correct, M9).
+- **On a service (process) restart**, the read-model is **durable** (SQLite) — it is not rebuilt
+  from scratch. The **idempotent inbox** is the last-processed marker and the **durable work queue**
+  redelivers the unacked tail, so a restart replays past the marker with **no double-count (M6)**
+  and **no lost events (M4)**. The tie-break sequence stays monotonic via `MaxSeq` restart seeding.
+
+Reconnect backoff is a documented default (not a confirm-at-build knob — epics §"Build-config knobs").
 
 ## Events
 
