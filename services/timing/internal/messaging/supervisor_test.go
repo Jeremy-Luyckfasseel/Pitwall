@@ -81,8 +81,8 @@ func TestSupervisorConnectsOnceAndReportsConnected(t *testing.T) {
 	done := make(chan struct{})
 	go func() { sup.Run(ctx); close(done) }()
 
-	recvCall(t, fc.callSig)         // dialed once on start
-	recvState(t, states, true)      // reported connected
+	recvCall(t, fc.callSig)    // dialed once on start
+	recvState(t, states, true) // reported connected
 
 	cancel()
 	select {
@@ -115,7 +115,7 @@ func TestSupervisorReconnectsOnConnectionLoss(t *testing.T) {
 	fc.mu.Unlock()
 
 	recvState(t, states, false) // saw the drop
-	recvCall(t, fc.callSig)      // re-dialed (this IS the re-declare hook running again)
+	recvCall(t, fc.callSig)     // re-dialed (this IS the re-declare hook running again)
 	recvState(t, states, true)  // back up
 }
 
