@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -101,7 +102,7 @@ func run() int {
 	}
 	log.Info("connected; own exchange declared", "exchange", messaging.LeaderboardExchange, "instanceId", instanceID)
 
-	if err := bus.DeclareDLQTopology(messaging.ConsumerOptions{
+	consumerOpts := messaging.ConsumerOptions{
 		SourceExchange: cfg.TimingExchange,
 		QueueName:      consumeQueue,
 		RoutingKeys: []string{
@@ -110,46 +111,37 @@ func run() int {
 			messaging.SessionEndedRoutingKey,
 		},
 		Prefetch: cfg.ConsumePrefetch,
-	}); err != nil {
-		log.Error("failed to declare the consumer queue + DLQ topology", "error", err.Error())
-		_ = bus.Close()
-		return 1
 	}
-	log.Info("DLQ topology declared",
-		"dlx", messaging.LeaderboardDLXExchange,
-		"retryQueue", messaging.RetryQueueName(consumeQueue),
-		"parkingQueue", messaging.ParkingQueueName(consumeQueue),
-		"maxAttempts", cfg.DLQMaxAttempts, "retryBaseMs", cfg.DLQRetryBaseMs,
-		"retryMultiplier", cfg.DLQRetryMultiplier, "retryMaxMs", cfg.DLQRetryMaxMs)
-	deliveries, err := bus.Consume(consumeQueue)
-	if err != nil {
-		log.Error("failed to start consuming", "error", err.Error())
-		_ = bus.Close()
-		return 1
-	}
-	log.Info("consuming", "queue", consumeQueue, "source", cfg.TimingExchange,
-		"routingKeys", []string{messaging.LapRecordedRoutingKey,
-			messaging.SessionStartedRoutingKey, messaging.SessionEndedRoutingKey},
-		"prefetch", cfg.ConsumePrefetch)
+
+	// busConnected drives the served bundle's stale flag (Story 1.10). It starts
+	// true (Dial succeeded), and the connection supervisor flips it on each
+	// connected<->lost transition. A bus-down freezes the board on last-known and
+	// flags it reconnecting — honest degradation, never faked-live (FR47, C1).
+	var busConnected atomic.Bool
+	busConnected.Store(true)
 
 	// The live board: serves the embedded SPA + pushes standings over SSE. The
 	// snapshot func reads the CURRENT session's board on demand (the board owns
 	// no state; the auto-reset IS this read switching to the newest session).
 	// On a transient read error it serves the LAST-KNOWN-GOOD snapshot instead
 	// of the waiting state — a DB hiccup must never visibly wipe a live board
-	// (session:null is reserved for "no session ever seen").
+	// (session:null is reserved for "no session ever seen"). Every served bundle
+	// carries the current bus-connection state (stale flag).
 	var snapMu sync.Mutex
 	lastGood := web.ToSnapshot(nil)
 	snapshot := func() web.Snapshot {
 		b, serr := store.CurrentBoard(context.Background())
 		snapMu.Lock()
-		defer snapMu.Unlock()
 		if serr != nil {
 			log.Error("failed to read the current board for snapshot; serving last-known-good", "error", serr.Error())
-			return lastGood
+			snap := lastGood
+			snapMu.Unlock()
+			return snap.WithConnection(busConnected.Load())
 		}
 		lastGood = web.ToSnapshot(b) // nil board = no session ever seen (waiting state)
-		return lastGood
+		snap := lastGood
+		snapMu.Unlock()
+		return snap.WithConnection(busConnected.Load())
 	}
 	server := web.NewServer(cfg.HTTPAddr, snapshot, log)
 
@@ -184,6 +176,31 @@ func run() int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+
+	// Supervise the broker connection + consumer (Story 1.10): declare the DLQ
+	// topology, consume, and on a mid-session bus kill re-dial + re-declare +
+	// re-subscribe, pumping into a STABLE deliveries channel so the Handler keeps
+	// running across reconnects. The state callback flips the stale flag and
+	// pushes a fresh bundle so connected boards see the change immediately.
+	deliveries, err := bus.ConnectAndConsume(ctx, consumerOpts, log, func(connected bool) {
+		busConnected.Store(connected)
+		if connected {
+			log.Info("broker connection established; board live", "queue", consumeQueue)
+		} else {
+			log.Warn("broker connection lost; board frozen on last-known, flagged reconnecting")
+		}
+		server.Publish() // push the stale-flag transition to connected SSE clients
+	})
+	if err != nil {
+		log.Error("failed to start the consumer connection supervisor", "error", err.Error())
+		_ = bus.Close()
+		return 1
+	}
+	log.Info("consuming", "queue", consumeQueue, "source", cfg.TimingExchange,
+		"dlx", messaging.LeaderboardDLXExchange,
+		"retryQueue", messaging.RetryQueueName(consumeQueue),
+		"parkingQueue", messaging.ParkingQueueName(consumeQueue),
+		"prefetch", cfg.ConsumePrefetch)
 
 	hbDone := make(chan struct{})
 	go func() { _ = emitter.Run(ctx); close(hbDone) }()

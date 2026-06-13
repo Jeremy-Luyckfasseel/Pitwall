@@ -78,6 +78,6 @@ copies), `session.scheduled`/`session.rescheduled` (know the plan),
 | Scanner goes offline mid-session | Prior laps already persisted (persist-first) → never lost. Emit `scanner.offline`, flag a gap, alert Control Room. Missed crossings are acknowledged, **never faked**. Resume + `scanner.online` on recovery. |
 | Duplicate/bounce read | Rejected by the minimum-lap-time filter. |
 | Scan of an unknown token at the line (no resolved `masterId`) | **Register-first** (Q6.4, Round 19): every racer is resolved to a `masterId` at check-in **before** going on track, so this is an **operator-surfaced exception**, not a normal path — hold the scan locally, flag + alert Control Room (the person must complete check-in). **Never mint an id, never emit an anonymous lap, never drop it.** |
-| RabbitMQ down | Laps still persisted locally + queued in outbox; flushed on recovery. |
+| RabbitMQ down (mid-session bus kill) | Laps still persisted locally + queued in the outbox; the Publisher's reconnect supervisor re-dials in-process (capped backoff) and re-declares the exchange + confirm channel, so the outbox **flushes automatically on recovery** with no loss (Story 1.10, NFR2). The heartbeat fails+skips while down, leaving the liveness file stale (honest bus-down signal). |
 | Service restart mid-session | Replay from last-processed marker; idempotent inbox dedupes; local lap store intact. |
 | Lap arrives for a session Timing thinks isn't active | Accept and log a warning; reconcile session state from the actual scan stream (physical reality wins). |

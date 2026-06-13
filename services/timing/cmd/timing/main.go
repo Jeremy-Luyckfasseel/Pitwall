@@ -84,15 +84,6 @@ func run() int {
 	}
 	log.Info("connected; exchange declared", "exchange", messaging.TimingExchange, "instanceId", instanceID)
 
-	// Separate confirm-mode channel for the outbox relay (heartbeat stays
-	// fire-and-forget on its own channel).
-	confirmCh, err := pub.OpenConfirmChannel()
-	if err != nil {
-		log.Error("failed to open confirm channel for the relay", "error", err.Error())
-		_ = pub.Close()
-		return 1
-	}
-
 	emitter := &heartbeat.Emitter{
 		Interval:     time.Duration(cfg.HeartbeatInterval) * time.Millisecond,
 		LivenessFile: cfg.LivenessFile,
@@ -107,7 +98,7 @@ func run() int {
 	outboxRelay := relay.New(relay.Config{
 		Store:    outbox,
 		Validate: validator.ValidateEnvelopeBytes,
-		Publish:  confirmCh.PublishConfirmed,
+		Publish:  pub.PublishConfirmed, // reconnect-aware: uses the current confirm channel
 		Interval: time.Duration(cfg.OutboxPollInterval) * time.Millisecond,
 		Log:      log,
 	})
@@ -140,6 +131,22 @@ func run() int {
 	// Run until SIGTERM/SIGINT.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+
+	// Supervise the broker connection (Story 1.10): on a mid-session bus kill the
+	// supervisor re-dials with backoff and re-declares the exchange + confirm
+	// channel; the relay (retry-forever) then flushes the outbox on reconnect. No
+	// stale flag here — that is the Leaderboard's spectator-facing concern.
+	if err := pub.ConnectAndServe(ctx, log, func(connected bool) {
+		if connected {
+			log.Info("broker connection established", "exchange", messaging.TimingExchange)
+		} else {
+			log.Warn("broker connection lost; buffering in the outbox until reconnect")
+		}
+	}); err != nil {
+		log.Error("failed to start the broker connection supervisor", "error", err.Error())
+		_ = pub.Close()
+		return 1
+	}
 
 	loopDone := make(chan struct{})
 	go func() {
@@ -178,9 +185,6 @@ func run() int {
 
 	flushOutbox(shutdownCtx, log, outboxRelay)
 
-	if cerr := confirmCh.Close(); cerr != nil {
-		log.Error("error closing relay confirm channel", "error", cerr.Error())
-	}
 	if err := pub.Close(); err != nil {
 		log.Error("error closing broker connection", "error", err.Error())
 		return 1

@@ -27,6 +27,14 @@ here is **extracted** to `libs/go-pitwall` in Epic 2 (grow-don't-pre-scaffold).
     consumer-side RabbitMQ DLQ/parking topology in Story 1.9).
   - stays `pending` — broker unreachable; retried (capped backoff) **forever** with
     **no loss**, surviving a bus outage **and** a service restart.
+- **Live bus-kill reconnection** (Story 1.10): the Publisher is **reconnect-aware**.
+  amqp091-go does **not** auto-recover a dropped connection, so a built-in supervisor
+  re-dials with capped-exponential backoff (500 ms → 5 s ceiling) and re-declares the
+  exchange + confirm channel on a **mid-session** RabbitMQ kill (not just a restart). The
+  relay's and heartbeat's publish calls transparently use the **current** channel under a
+  mutex, so on restore the outbox **flushes automatically** with no loss and no duplicate
+  beyond what the consumer's inbox dedupes (NFR2). While down, the heartbeat publish fails
+  and is logged+skipped, leaving the liveness touch-file stale — the honest bus-down signal.
 - Maintains a **liveness touch-file** the Docker `healthcheck` reads.
 - Logs **structured JSON** (one correlationId per process lifecycle) and shuts down
   **gracefully** on SIGTERM/SIGINT, with a bounded best-effort **outbox flush**.

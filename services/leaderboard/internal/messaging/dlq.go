@@ -93,27 +93,31 @@ func buildDLXPublishing(body []byte, expirationMs, retryCount int, parkReason st
 // dead-letter args (a one-time, self-healing migration from the arg-less 1.7/1.8
 // queue — see declareWorkQueueResilient). Idempotent on a fresh broker.
 func (b *Bus) DeclareDLQTopology(opts ConsumerOptions) error {
+	ch := b.curCh()
+	if ch == nil {
+		return errChannelGone
+	}
 	retryQueue := RetryQueueName(opts.QueueName)
 	parkingQueue := ParkingQueueName(opts.QueueName)
 
 	// Producer's exchange (so binding works even if we start before the producer).
-	if err := b.ch.ExchangeDeclare(opts.SourceExchange, "topic", true, false, false, false, nil); err != nil {
+	if err := ch.ExchangeDeclare(opts.SourceExchange, "topic", true, false, false, false, nil); err != nil {
 		return err
 	}
 	// The consumer-side dead-letter exchange (direct: route by retry/redeliver/park).
-	if err := b.ch.ExchangeDeclare(LeaderboardDLXExchange, "direct", true, false, false, false, nil); err != nil {
+	if err := ch.ExchangeDeclare(LeaderboardDLXExchange, "direct", true, false, false, false, nil); err != nil {
 		return err
 	}
 	// Retry queue: no consumer; per-message TTL governs the delay; on expiry it
 	// dead-letters back to the work queue via the DLX's `redeliver` key.
-	if _, err := b.ch.QueueDeclare(retryQueue, true, false, false, false, amqp.Table{
+	if _, err := ch.QueueDeclare(retryQueue, true, false, false, false, amqp.Table{
 		"x-dead-letter-exchange":    LeaderboardDLXExchange,
 		"x-dead-letter-routing-key": dlqRedeliverRoutingKey,
 	}); err != nil {
 		return err
 	}
 	// Parking queue: terminal quarantine — no dead-letter args, no consumer.
-	if _, err := b.ch.QueueDeclare(parkingQueue, true, false, false, false, nil); err != nil {
+	if _, err := ch.QueueDeclare(parkingQueue, true, false, false, false, nil); err != nil {
 		return err
 	}
 	// Work queue WITH dead-letter args (safety net: an unmodelled reject parks
@@ -131,19 +135,25 @@ func (b *Bus) DeclareDLQTopology(opts ConsumerOptions) error {
 		{dlqRedeliverRoutingKey, opts.QueueName},
 		{dlqParkRoutingKey, parkingQueue},
 	} {
-		if err := b.ch.QueueBind(bind.queue, bind.key, LeaderboardDLXExchange, false, nil); err != nil {
+		if err := ch.QueueBind(bind.queue, bind.key, LeaderboardDLXExchange, false, nil); err != nil {
 			return err
 		}
 	}
 	// Work queue ← source exchange, on every routing key (one queue preserves
 	// publish order across lap.recorded + session.*).
 	for _, key := range opts.RoutingKeys {
-		if err := b.ch.QueueBind(opts.QueueName, key, opts.SourceExchange, false, nil); err != nil {
+		if err := ch.QueueBind(opts.QueueName, key, opts.SourceExchange, false, nil); err != nil {
 			return err
 		}
 	}
+	// Set the DLX name under the lock: DeclareDLQTopology runs on the supervisor
+	// goroutine (re-run on every reconnect) while PublishToDLX reads b.dlx on the
+	// Handler goroutine — guard the write so the two never race (the value is the
+	// same constant, but an unsynchronized string read/write is a data race).
+	b.mu.Lock()
 	b.dlx = LeaderboardDLXExchange
-	return b.ch.Qos(opts.Prefetch, 0, false)
+	b.mu.Unlock()
+	return ch.Qos(opts.Prefetch, 0, false)
 }
 
 // declareWorkQueueResilient declares the work queue with the given args, healing
@@ -159,7 +169,11 @@ func (b *Bus) DeclareDLQTopology(opts ConsumerOptions) error {
 // will re-emit it (golden rule). If the stale queue still holds messages, we refuse
 // loudly so an operator drains it first — "never silently dropped" over convenience.
 func (b *Bus) declareWorkQueueResilient(name string, args amqp.Table) error {
-	probe, err := b.conn.Channel()
+	conn := b.curConn()
+	if conn == nil {
+		return errChannelGone
+	}
+	probe, err := conn.Channel()
 	if err != nil {
 		return err
 	}
@@ -172,7 +186,7 @@ func (b *Bus) declareWorkQueueResilient(name string, args amqp.Table) error {
 	// 406: the probe channel is already closed by the broker. Migrate the arg-less
 	// 1.7/1.8 queue to one carrying the DLX args by delete + redeclare on a fresh
 	// channel — but only if it is EMPTY, so no in-flight message is ever lost.
-	cleaner, cerr := b.conn.Channel()
+	cleaner, cerr := conn.Channel()
 	if cerr != nil {
 		return cerr
 	}
@@ -201,7 +215,14 @@ func isPreconditionFailed(err error) bool {
 // expirationMs is 0 and parkReason records why. Manual-ack discipline: the
 // caller acks the ORIGINAL delivery only after this republish succeeds.
 func (b *Bus) PublishToDLX(ctx context.Context, routingKey string, body []byte, expirationMs, retryCount int, parkReason string) error {
-	return b.ch.PublishWithContext(ctx, b.dlx, routingKey, false, false,
+	b.mu.RLock()
+	ch := b.ch
+	dlx := b.dlx
+	b.mu.RUnlock()
+	if ch == nil {
+		return errChannelGone
+	}
+	return ch.PublishWithContext(ctx, dlx, routingKey, false, false,
 		buildDLXPublishing(body, expirationMs, retryCount, parkReason))
 }
 

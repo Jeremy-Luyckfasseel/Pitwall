@@ -78,8 +78,40 @@ func TestToSnapshot_NilBoard_WaitingState(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	s := string(b)
-	if s != `{"session":null,"rows":[]}` {
-		t.Errorf("wire shape = %s, want {\"session\":null,\"rows\":[]}", s)
+	if s != `{"session":null,"rows":[],"stale":false,"connection":""}` {
+		t.Errorf("wire shape = %s, want {\"session\":null,\"rows\":[],\"stale\":false,\"connection\":\"\"}", s)
+	}
+}
+
+// AC1 (Story 1.10): the served bundle carries an honest connection state. When
+// connected it is live (not stale); when the bus is down it is flagged
+// stale/reconnecting — and the last-known board (session + rows) is preserved, so
+// the board freezes on last-known rather than blanking or faking live.
+func TestSnapshot_WithConnection(t *testing.T) {
+	base := ToSnapshot(&persistence.Board{
+		SessionID: "s1",
+		Status:    persistence.StatusActive,
+		Bests:     []domain.DriverBest{{MasterID: "m1", BestLapMs: 41000, BestLapAt: "t", BestLapSeq: 1}},
+	})
+
+	live := base.WithConnection(true)
+	if live.Stale {
+		t.Errorf("connected: Stale = true, want false")
+	}
+	if live.Connection != "live" {
+		t.Errorf("connected: Connection = %q, want \"live\"", live.Connection)
+	}
+
+	down := base.WithConnection(false)
+	if !down.Stale {
+		t.Errorf("disconnected: Stale = false, want true")
+	}
+	if down.Connection != "reconnecting" {
+		t.Errorf("disconnected: Connection = %q, want \"reconnecting\"", down.Connection)
+	}
+	// The stale board still serves its last-known session + rows (frozen, flagged).
+	if down.Session == nil || down.Session.SessionID != "s1" || len(down.Rows) != 1 {
+		t.Errorf("stale board must preserve last-known session/rows, got %+v rows=%d", down.Session, len(down.Rows))
 	}
 }
 

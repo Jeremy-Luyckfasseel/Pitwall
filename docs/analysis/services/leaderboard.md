@@ -34,5 +34,5 @@ local copy of the current session's standings + leaderboard nicknames (from Driv
 | Invalid message on consume (fails `/contract`, or blank `sessionId`) | **Parked immediately** in `leaderboard.lap-recorded.parking` + alert — never retried as poison, never applied (Story 1.9, M5). |
 | Processing failure (transient or genuine poison) | **TTL-retry with exponential backoff** via `leaderboard.lap-recorded.retry` (1s→2s→4s→8s); clears within the cap → applied once; exceeds the 5-attempt cap → **parked + Control-Room alert** (Story 1.9, NFR4/NFR6). |
 | Missing nickname | Fall back to a racing number or a short form of `masterId`; update when `driver.profile_updated` arrives. |
-| Service restart mid-session | Rebuild the board by replaying the session's events from the last marker. |
-| RabbitMQ down | Display freezes on last-known standings (clearly the safe degradation); catches up on reconnect. |
+| Service restart mid-session | The read-model is **durable** (SQLite) — not rebuilt from scratch. The idempotent inbox is the last-processed marker; the durable work queue redelivers the unacked tail, so the restart replays past the marker with **no double-count (M6)** and **no loss (M4)** (Story 1.10). |
+| RabbitMQ down (mid-session bus kill) | Display **freezes on last-known standings**; the served bundle flips **`stale`/`reconnecting`** (flagged, never faked-live — FR47/C1). A reconnect supervisor re-dials with capped backoff and re-declares topology; on restore the flag clears and the board **reconverges ≤ 10 s** (Story 1.10, M9). |
