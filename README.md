@@ -75,8 +75,26 @@ docs/
 contract/
   schemas/         the envelope + per-event JSON Schemas
   examples/        a worked example per event
+services/          the polyglot services (each: own Dockerfile, DB, tests)
+tests/
+  contract/        contract-layer validation (pytest against /contract)
+  conformance/     the cross-language conformance harness + e2e smoke (4th gate)
 CLAUDE.md          operating guide for working in this repo
 ```
+
+## Tests — four CI-gated layers (NFR23)
+
+Per `docs/analysis/03-engineering-standards.md`, every change passes four layers before merge
+(no merge on red):
+
+1. **Unit** — pure logic, no I/O (per service).
+2. **Integration** — real RabbitMQ + DB via testcontainers (per service).
+3. **Contract** — every published/consumed message validated against `/contract`
+   (`make contract-test`).
+4. **e2e smoke** — the **cross-language conformance harness** drives the real service binaries
+   against one real RabbitMQ and asserts identical observable bus behavior
+   (`make smoke`; see [`tests/conformance/`](tests/conformance/)). This is the required merge
+   gate; a flaky scenario goes to a non-blocking **quarantine lane**, never `@skip`.
 
 ## Project status & roadmap
 

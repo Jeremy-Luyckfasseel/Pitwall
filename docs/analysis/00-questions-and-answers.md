@@ -1132,3 +1132,53 @@ a struggling downstream.
 > **structured ERROR log line** with a stable marker (no new `/contract` event is invented ahead of its
 > owner — golden rule + the Story-1.6/1.7 precedent); the parking queue itself is the durable, observable
 > quarantine.
+
+## Round 28 — Cross-language conformance harness + e2e smoke: execution model & layout (2026-06-13)
+
+> Decided during the build phase (Epic 1, **Story 1.11** — the cross-language conformance harness + green
+> e2e smoke gate). The *design* was already pinned: **AR16** ("one YAML scenario spec — publish-redeliver,
+> inbox-dup, crash-after-ack, peer-down — + a thin **per-language runner (Go for now)** asserting identical
+> observable outcomes against the **same RabbitMQ**; it **IS the e2e skeleton**; tests **wait on observable
+> conditions, never `sleep`**; flaky → **quarantine lane, never `@skip`**"), **NFR23** (four CI-gated test
+> layers; e2e smoke is a **required merge gate**, no merge on red), and **engineering-standards §3.4** (the
+> e2e smoke is the happy path across the bus **using the simulators**). What was **not pinned anywhere** —
+> and the docs forbid inventing — was the harness's **execution model** (does the runner drive the real
+> built service *artifacts*, the real *binaries*, or wire the packages *in-process*?) and its **repo
+> layout/module shape**. Both are answered here before building. **No new ADR** — this realizes AR16's
+> harness inside the existing architecture, changing no architectural decision; it sets the e2e *pattern*
+> every later epic inherits ("the Epic-1 e2e smoke + 4-layer CI stay green").
+
+**Q28.1 — How does the conformance harness / e2e smoke execute the system under test?**
+A: **Real service binaries against a real (testcontainers) RabbitMQ.** The Go runner reads the YAML scenario
+spec, stands up a real `rabbitmq:4.3-management-alpine` via **testcontainers** (the same broker every
+scenario shares), `go build`s the **real Timing (simulator mode, seed-deterministic) and Leaderboard
+binaries**, runs them as **subprocesses** pointed at that broker via env, and asserts **observable
+outcomes** — the served board (Leaderboard HTTP/SSE snapshot), outbox/queue state (RabbitMQ management API),
+and structured log markers — **waiting on conditions, never sleeping**. Rationale: (1) it is **genuinely
+end-to-end** — real entrypoints, real config loading, real wiring, real broker — not a re-test of the same
+in-process seams the integration layer already covers; (2) it **matches the existing CI shape** (`ci.yml`
+uses `setup-go` + testcontainers and does **not** build Docker images — image builds live in `release.yml`
+per **AR17**), so the smoke gate adds no image-build cost to every PR; (3) it cleanly expresses all four
+AR16 reliability scenarios at the right seam (peer-down = Stop the broker container, as Story 1.10 proved;
+crash-after-ack = kill+restart the consumer subprocess; inbox-dup = republish a persistent message;
+publish-redeliver = nack/redeliver); (4) "**thin per-language runner**" is honoured — the runner is Go
+*test code* driving real artifacts, and a second-language service later joins the **same YAML spec** with
+its own thin runner. *Rejected:* **`docker compose up` the images** (most prod-faithful, but forces every PR
+to build the Timing+Leaderboard images — the Leaderboard image has a node/vite stage — which the current
+per-PR pipeline deliberately does not do; revisit only if subprocess-vs-image fidelity ever bites);
+**in-process package wiring** (lightest, but the services are **separate Go modules** so it needs
+`go.work`/`replace`, and it is **not truly e2e** — it just re-exercises the integration seam).
+
+**Q28.2 — Where does the harness live, and is the Go runner its own module?**
+A: **`tests/conformance/`, with the Go runner as its own Go module.** Layout: `tests/conformance/scenarios/*.yaml`
+(the **language-neutral** scenario spec) + `tests/conformance/go/` (its **own `go.mod`**, so it can depend on
+amqp091 / testcontainers / a YAML parser without touching the service modules; it drives the binaries built
+from `services/*`, it does **not** import their internal packages). This sits parallel to the existing
+`tests/contract/` (Python). **One** directory — not a `tests/e2e/` + `tests/conformance/` split — because
+AR16 states the conformance harness **IS the e2e skeleton**: the happy-path e2e smoke is simply the
+`smoke` scenario alongside the four reliability scenarios in the same spec. Wiring: **`make smoke`** runs it;
+a **new required `ci.yml` job (`e2e-smoke`)** gates merges (NFR23). A **flaky** scenario moves to a
+**quarantine lane** (a non-required, separately-reported run — e.g. a `quarantine`-tagged job), **never
+`@skip`** (AR16). *(Scope: this pins the harness location + module shape + the `make`/CI entrypoints for the
+whole platform; later languages add a sibling runner under `tests/conformance/<lang>/` against the same
+`scenarios/*.yaml`.)*
