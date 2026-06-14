@@ -120,3 +120,22 @@ func NewDomainEnvelope(routingKey, source, correlationID, occurredAt string, dat
 		Data:            data,
 	}
 }
+
+// NewCausedEnvelope is NewDomainEnvelope for an event caused by another message: it
+// stamps causationId with the id of the triggering envelope (never null), preserving
+// the correlationId so the whole flow stays linked. Used by reactive handlers (e.g. a
+// privacy.erased ack caused by a privacy.erasure_requested).
+func NewCausedEnvelope(routingKey, source, correlationID, causationID, occurredAt string, data any) Envelope {
+	cid := causationID
+	return Envelope{
+		ID:              uuid.Must(uuid.NewV7()).String(),
+		Type:            routingKey,
+		Source:          source,
+		SchemaVersion:   1,
+		EnvelopeVersion: 1,
+		OccurredAt:      occurredAt,
+		CorrelationID:   correlationID,
+		CausationID:     &cid,
+		Data:            data,
+	}
+}
