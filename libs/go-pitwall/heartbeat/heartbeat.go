@@ -7,6 +7,7 @@ package heartbeat
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"time"
@@ -42,6 +43,9 @@ func (e *Emitter) Run(ctx context.Context) error {
 	now := e.Now
 	if now == nil {
 		now = time.Now
+	}
+	if e.Log == nil { // a reusable lib must not panic if a consumer omits the logger
+		e.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	ticker := time.NewTicker(e.Interval)
 	defer ticker.Stop()

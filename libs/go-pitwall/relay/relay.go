@@ -15,6 +15,7 @@ package relay
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"time"
 
@@ -69,6 +70,9 @@ func New(cfg Config) *Relay {
 	}
 	if cfg.Batch <= 0 {
 		cfg.Batch = 100
+	}
+	if cfg.Log == nil { // a reusable lib must not panic if a consumer omits the logger
+		cfg.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	return &Relay{cfg: cfg, kick: make(chan struct{}, 1)}
 }
