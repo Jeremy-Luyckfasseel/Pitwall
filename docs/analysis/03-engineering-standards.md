@@ -100,8 +100,15 @@ CI **gates** on all four. No merge to `main` with a red pipeline (GitHub Flow, R
 | **On push to `main`** (squash-merge) | same gates; `main` is the always-green release line. Merging does **not** deploy. |
 | **On per-service tag** `‹svc›-vX.Y.Z` | CI builds that service's image, pushes to **GHCR**, then the **VPS pulls** and `docker compose up -d` recreates **only that container**. Independent per-team releases in one repo. |
 | **Security scanning** (Round 23) | Secret scanning (GitHub native + push-protection; gitleaks fallback) — **blocking**. SAST (CodeQL) — **blocking on high/critical**. Dependency/SCA (Dependabot + govulncheck/pip-audit/npm audit) and container image scan (Trivy) — **advisory** (Security tab). Phased in per language (Go @ 1.3, Python @ 3.1, TS @ 4.x/5.x); secret scanning applies from the scaffold. |
-| **Secrets** | `.env` on the VPS (and locally); CI holds only GHCR + SSH deploy creds. |
+| **Secrets** | `.env` on the VPS (and locally); CI holds only the GHCR push (automatic `GITHUB_TOKEN`). |
 | **Rollback** | redeploy the previous tag's image (immutable images in GHCR). |
+
+> **Realized deploy mechanism (Story 1.12 / [Q29.1](00-questions-and-answers.md#round-29)):** the
+> "VPS pulls" step is a **pull-based poller** (a systemd timer on the VPS pulls the new public-GHCR
+> image and recreates only the changed container) — **not** CI-SSHes-in. So **CI holds no SSH deploy
+> creds**; the only CI credential is the GHCR push via the automatic `GITHUB_TOKEN` (this **supersedes**
+> the older "CI holds … SSH deploy creds" wording above). GHCR images are **public**, so the VPS pulls
+> with no login. Board reachability in prod is **loopback + SSH tunnel** ([Q29.3](00-questions-and-answers.md#round-29)).
 
 Branch→environment and tag→release rationale:
 [ADR-0007](../adr/0007-monorepo-per-service-deploy.md).

@@ -1,0 +1,55 @@
+# Per-service release pipeline (ADR-0007). A per-service tag `‹svc›-vX.Y.Z` (e.g. timing-v0.1.0)
+# builds ONLY that service's image (Docker context = repo root, the service needs /contract) and
+# pushes it to PUBLIC GHCR as ghcr.io/<owner>/pitwall-<svc>:<version> (+ :latest). The VPS PULLS it
+# (deploy-poller, Story 1.12 / Q29.1) — there is NO deploy/SSH step here (pull-based, no SSH secret).
+#
+# Deploy ≠ merge (AC3): this workflow triggers ONLY on tags — merging to main never deploys. Per-PR
+# image builds deliberately live ONLY here, not in ci.yml (AR17 — the smoke gate stays build-free).
+name: release
+
+on:
+  push:
+    tags:
+      - '*-v[0-9]*'   # ‹svc›-vX.Y.Z (must have -v<digit>); the parser still rejects anything malformed
+
+permissions:
+  contents: read
+  packages: write   # push to GHCR via the automatic GITHUB_TOKEN — no PAT, no SSH secret
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse the per-service tag → service + version
+        id: tag
+        run: sh scripts/parse-service-tag.sh "${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Confirm the service exists (build only a real service)
+        run: |
+          svc='${{ steps.tag.outputs.service }}'
+          test -f "services/${svc}/Dockerfile" || { echo "no services/${svc}/Dockerfile — refusing to build"; exit 1; }
+
+      - name: Compute the lowercase GHCR image name
+        id: img
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/pitwall-${{ steps.tag.outputs.service }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build only this service and push to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .                                            # repo root — the service needs /contract
+          file: services/${{ steps.tag.outputs.service }}/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.img.outputs.image }}:${{ steps.tag.outputs.version }}
+            ${{ steps.img.outputs.image }}:latest

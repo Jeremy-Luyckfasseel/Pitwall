@@ -1,0 +1,8 @@
+[Unit]
+Description=Pitwall deploy poller (pulls newest per-service GHCR image, recreates only that container)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/root/pitwall-deploy-poller.sh

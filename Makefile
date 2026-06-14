@@ -2,7 +2,7 @@
 # Targets grow as the platform does (walking-skeleton-first). Recipes are POSIX sh; run on
 # Linux / macOS / WSL / git-bash (the CI runners and the VPS).
 .DEFAULT_GOAL := help
-.PHONY: help up down clean logs contract-test contract test smoke smoke-quarantine
+.PHONY: help up down clean logs contract-test contract test smoke smoke-quarantine prod-config
 
 help: ## Show this help
 	@echo "Pitwall make targets:"
@@ -55,3 +55,6 @@ smoke: ## Cross-language conformance harness + e2e smoke — REQUIRED lane (real
 
 smoke-quarantine: ## Conformance QUARANTINE lane — flaky scenarios, non-blocking (AR16: quarantine, never @skip)
 	cd tests/conformance/go && CONFORMANCE_LANE=quarantine go test -tags=integration -timeout 900s ./...
+
+prod-config: ## Validate the merged prod stack (GHCR images, loopback board, no version:, creds-fail-fast) — needs the docker CLI, NOT the daemon
+	sh scripts/check-prod-compose.sh
