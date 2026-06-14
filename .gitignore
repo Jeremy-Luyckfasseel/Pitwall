@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+# local MCP config (e.g. VPS host) — never commit; this is a public repo
+.mcp.json
 
 # Dependencies / build output (per-service, polyglot — extend as services are added)
 node_modules/
