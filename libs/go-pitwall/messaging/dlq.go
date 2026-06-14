@@ -90,6 +90,12 @@ func buildDLXPublishing(body []byte, expirationMs, retryCount int, parkReason st
 // declareWorkQueueResilient). Idempotent on a fresh broker. The DLX name comes from
 // opts.DLXExchange (the service's topology).
 func (b *Bus) DeclareDLQTopology(opts ConsumerOptions) error {
+	// Fail fast on a missing DLX name: the old hard-coded constant made this
+	// impossible, but now that the DLX is a per-service parameter an unset field
+	// would declare/publish to the AMQP default exchange — a silent misconfiguration.
+	if opts.DLXExchange == "" {
+		return fmt.Errorf("DeclareDLQTopology: ConsumerOptions.DLXExchange must be set (the consumer-side dead-letter exchange name)")
+	}
 	ch := b.curCh()
 	if ch == nil {
 		return errChannelGone
