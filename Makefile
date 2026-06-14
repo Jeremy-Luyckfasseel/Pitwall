@@ -46,9 +46,11 @@ contract-test: ## Run the contract gates (schema-lint + example validation + kno
 contract: ## (placeholder) Wire-DTO codegen — introduced with the 2nd language (Epic 2 / AR15 step 4)
 	@echo "make contract: nothing to generate yet — codegen arrives with the 2nd language (Epic 2 / AR15 step 4)."
 
-test: ## Per-service tests. Timing (Go): unit always; integration (real RabbitMQ via testcontainers) needs Docker.
+test: ## Go unit tests. Shared lib + each service; integration (real RabbitMQ via testcontainers) needs Docker.
+	cd libs/go-pitwall && go build ./... && go vet ./... && go test ./...
 	cd services/timing && go build ./... && go vet ./... && go test ./...
-	@echo "Integration tests (need Docker): cd services/timing && go test -tags=integration ./test/integration/..."
+	cd services/leaderboard && go build ./... && go vet ./... && go test ./...
+	@echo "Integration tests (need Docker): cd services/<svc> && go test -tags=integration ./test/integration/..."
 
 smoke: ## Cross-language conformance harness + e2e smoke — REQUIRED lane (real binaries + real RabbitMQ via testcontainers; needs Docker)
 	cd tests/conformance/go && go test -tags=integration -timeout 900s ./...

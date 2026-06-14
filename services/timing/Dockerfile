@@ -5,9 +5,16 @@
 
 # --- build stage -------------------------------------------------------------
 FROM golang:1.26.4 AS build
+# Build context = repo ROOT so the shared blueprint lib (libs/go-pitwall, pinned via a
+# `replace` in go.mod) is in the context. GOWORK=off: the container build uses the
+# per-service go.mod replace, NOT the repo-root go.work (which is dev-only). The repo
+# layout is preserved under /src so `replace … => ../../libs/go-pitwall` resolves.
+ENV GOWORK=off
 WORKDIR /src
+COPY libs/go-pitwall/ ./libs/go-pitwall/
 
-# Cache deps on go.mod/go.sum only.
+WORKDIR /src/services/timing
+# Cache deps on go.mod/go.sum (the lib is replace-pinned local, fetched from context).
 COPY services/timing/go.mod services/timing/go.sum ./
 RUN go mod download
 
