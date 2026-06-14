@@ -20,9 +20,10 @@ func testValidator(t *testing.T) *Validator {
 	return v
 }
 
-// The real, committed lap.recorded example validates as an outbox event — the
-// relay's validate-on-publish accepts a contract-valid domain event (AC2).
-func TestValidateEnvelopeBytes_AcceptsRealLapRecorded(t *testing.T) {
+// A real, committed example validates as a marshalled message — validate-on-publish /
+// -on-consume accepts a contract-valid event. (Uses the timing lap.recorded example
+// purely as a known-good fixture from the real /contract corpus.)
+func TestValidateEnvelopeBytes_AcceptsRealExample(t *testing.T) {
 	v := testValidator(t)
 	dir, _ := ResolveContractDir("")
 	payload, err := os.ReadFile(filepath.Join(dir, "examples", "timing", "lap.recorded.v1.example.json"))
@@ -30,12 +31,11 @@ func TestValidateEnvelopeBytes_AcceptsRealLapRecorded(t *testing.T) {
 		t.Fatalf("read example: %v", err)
 	}
 	if err := v.ValidateEnvelopeBytes(payload); err != nil {
-		t.Fatalf("valid lap.recorded rejected: %v", err)
+		t.Fatalf("valid example rejected: %v", err)
 	}
 }
 
-// A structurally broken envelope (correlationId not a UUID) is rejected — this
-// is the row the relay marks dead, never publishes (AC2).
+// A structurally broken envelope (correlationId not a UUID) is rejected.
 func TestValidateEnvelopeBytes_RejectsBadEnvelope(t *testing.T) {
 	v := testValidator(t)
 	bad := mutateExample(t, func(m map[string]any) { m["correlationId"] = "not-a-uuid" })
@@ -57,7 +57,7 @@ func TestValidateEnvelopeBytes_RejectsBadData(t *testing.T) {
 	}
 }
 
-// An event whose type has no /contract schema fails closed: we never publish an
+// An event whose type has no /contract schema fails closed: never publish/apply an
 // event we cannot validate.
 func TestValidateEnvelopeBytes_RejectsUnknownType(t *testing.T) {
 	v := testValidator(t)
@@ -67,7 +67,7 @@ func TestValidateEnvelopeBytes_RejectsUnknownType(t *testing.T) {
 	}
 }
 
-// mutateExample loads the real lap.recorded example, applies fn, and re-marshals.
+// mutateExample loads a real example, applies fn, and re-marshals.
 func mutateExample(t *testing.T, fn func(map[string]any)) []byte {
 	t.Helper()
 	dir, _ := ResolveContractDir("")

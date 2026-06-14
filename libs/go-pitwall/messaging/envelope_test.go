@@ -28,13 +28,13 @@ func TestFormatWireTime_ExactContractFormat(t *testing.T) {
 
 func TestNewHeartbeatEnvelope_ShapeAndWireRules(t *testing.T) {
 	now := time.Date(2026, 5, 31, 13, 45, 0, 0, time.UTC)
-	env := NewHeartbeatEnvelope("timing", "inst-1", "7c9e6a55-0e42-4f8b-bd1a-3c2d1e0f9a8b", now)
+	env := NewHeartbeatEnvelope("svc", "inst-1", "7c9e6a55-0e42-4f8b-bd1a-3c2d1e0f9a8b", now)
 
 	if env.Type != "control.heartbeat" {
 		t.Errorf("Type = %q, want control.heartbeat", env.Type)
 	}
-	if env.Source != "timing" {
-		t.Errorf("Source = %q, want timing", env.Source)
+	if env.Source != "svc" {
+		t.Errorf("Source = %q, want svc", env.Source)
 	}
 	if env.SchemaVersion != 1 || env.EnvelopeVersion != 1 {
 		t.Errorf("versions = %d/%d, want 1/1", env.SchemaVersion, env.EnvelopeVersion)
@@ -52,8 +52,8 @@ func TestNewHeartbeatEnvelope_ShapeAndWireRules(t *testing.T) {
 	if !ok {
 		t.Fatalf("Data is not HeartbeatData: %T", env.Data)
 	}
-	if data.Service != "timing" || data.InstanceID != "inst-1" {
-		t.Errorf("data = %+v, want service=timing instanceId=inst-1", data)
+	if data.Service != "svc" || data.InstanceID != "inst-1" {
+		t.Errorf("data = %+v, want service=svc instanceId=inst-1", data)
 	}
 	if !wireTimeRE.MatchString(data.At) {
 		t.Errorf("data.at %q does not match the contract pattern", data.At)
@@ -62,7 +62,7 @@ func TestNewHeartbeatEnvelope_ShapeAndWireRules(t *testing.T) {
 
 // causationId must SERIALIZE as null (present, not omitted) for a flow-originating event.
 func TestHeartbeatEnvelope_CausationIdSerializesAsNull(t *testing.T) {
-	env := NewHeartbeatEnvelope("timing", "inst-1", "cid", time.Now())
+	env := NewHeartbeatEnvelope("svc", "inst-1", "cid", time.Now())
 	b, err := json.Marshal(env)
 	if err != nil {
 		t.Fatal(err)
@@ -77,5 +77,24 @@ func TestHeartbeatEnvelope_CausationIdSerializesAsNull(t *testing.T) {
 	}
 	if string(v) != "null" {
 		t.Errorf("causationId = %s, want null", v)
+	}
+}
+
+// NewDomainEnvelope stamps a fresh v7 id, the given type, a null causationId, and the
+// supplied data — the generic builder services compose their typed events on top of.
+func TestNewDomainEnvelope_FlowOriginatingShape(t *testing.T) {
+	ts := FormatWireTime(time.Date(2026, 5, 31, 13, 45, 0, 0, time.UTC))
+	env := NewDomainEnvelope("some.event", "svc", "7c9e6a55-0e42-4f8b-bd1a-3c2d1e0f9a8b", ts, map[string]any{"k": "v"})
+	if env.Type != "some.event" || env.Source != "svc" {
+		t.Errorf("type/source = %q/%q", env.Type, env.Source)
+	}
+	if env.CausationID != nil {
+		t.Errorf("CausationID should be nil (flow-originating)")
+	}
+	if !lcUUIDRE.MatchString(env.ID) {
+		t.Errorf("envelope id %q is not a lowercase canonical UUID", env.ID)
+	}
+	if env.OccurredAt != ts {
+		t.Errorf("occurredAt = %q, want %q", env.OccurredAt, ts)
 	}
 }
