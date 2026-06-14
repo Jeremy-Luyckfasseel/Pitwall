@@ -1,0 +1,13 @@
+// Repo-root Go workspace — LOCAL multi-module dev convenience only (one `go build
+// ./...` / one editor across every module). It is NOT the Docker build mechanism:
+// each service container builds with GOWORK=off and resolves libs/go-pitwall via the
+// `replace` directive in its own go.mod (architecture §"Build & Dev Mechanics" #4).
+// Committed on purpose — see libs/go-pitwall/README.md.
+go 1.26.4
+
+use (
+	./libs/go-pitwall
+	./services/leaderboard
+	./services/timing
+	./tests/conformance/go
+)
