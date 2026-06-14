@@ -5,6 +5,7 @@ go 1.26.4
 require (
 	github.com/google/uuid v1.6.0
 	github.com/pressly/goose/v3 v3.27.1
+	github.com/rabbitmq/amqp091-go v1.11.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	modernc.org/sqlite v1.51.0
 )

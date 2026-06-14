@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/persistence"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/persistence"
 )
 
-// fakeStore is an in-memory stand-in for the outbox store, recording the
-// lifecycle calls the relay makes.
+// fakeStore is an in-memory stand-in for the outbox store, recording the lifecycle
+// calls the relay makes.
 type fakeStore struct {
 	pending     []persistence.OutboxRow
 	sent        []string
@@ -40,7 +40,7 @@ func (f *fakeStore) RecordFailure(_ context.Context, id, _ string) error {
 }
 
 func row(id string) persistence.OutboxRow {
-	return persistence.OutboxRow{ID: id, RoutingKey: "lap.recorded", Payload: []byte(`{}`), Status: "pending"}
+	return persistence.OutboxRow{ID: id, RoutingKey: "some.event", Payload: []byte(`{}`), Status: "pending"}
 }
 
 func newRelay(store Store, validate Validator, publish Publisher) *Relay {
@@ -58,7 +58,7 @@ func newRelay(store Store, validate Validator, publish Publisher) *Relay {
 var okValidate = func([]byte) error { return nil }
 var okPublish = func(context.Context, string, []byte) error { return nil }
 
-// Valid rows publish and flip to sent (AC1: sent only after a successful ack).
+// Valid rows publish and flip to sent (sent only after a successful ack).
 func TestDrainOnce_PublishesAndMarksSent(t *testing.T) {
 	store := &fakeStore{pending: []persistence.OutboxRow{row("a"), row("b")}}
 	r := newRelay(store, okValidate, okPublish)
@@ -72,8 +72,8 @@ func TestDrainOnce_PublishesAndMarksSent(t *testing.T) {
 	}
 }
 
-// A row that fails validation is quarantined, never published (AC2), and does
-// NOT block healthy rows behind it.
+// A row that fails validation is quarantined, never published, and does NOT block
+// healthy rows behind it.
 func TestDrainOnce_InvalidRowQuarantinedAndDoesNotBlock(t *testing.T) {
 	store := &fakeStore{pending: []persistence.OutboxRow{row("bad"), row("good")}}
 	published := []string{}
@@ -105,8 +105,8 @@ func TestDrainOnce_InvalidRowQuarantinedAndDoesNotBlock(t *testing.T) {
 	}
 }
 
-// A broker-unreachable publish keeps the row pending (RecordFailure, not
-// MarkSent) and stops the batch so the relay backs off and retries (AC3).
+// A broker-unreachable publish keeps the row pending (RecordFailure, not MarkSent) and
+// stops the batch so the relay backs off and retries.
 func TestDrainOnce_PublishFailureKeepsPending(t *testing.T) {
 	store := &fakeStore{pending: []persistence.OutboxRow{row("a"), row("b")}}
 	publish := func(context.Context, string, []byte) error { return errors.New("broker unreachable") }

@@ -133,7 +133,8 @@ func startDLQConsumer(t *testing.T, amqpURL, queueName string, fault *faultAppli
 			messaging.SessionStartedRoutingKey,
 			messaging.SessionEndedRoutingKey,
 		},
-		Prefetch: 16,
+		Prefetch:    16,
+		DLXExchange: messaging.LeaderboardDLXExchange,
 	}); err != nil {
 		t.Fatalf("declare DLQ topology: %v", err)
 	}

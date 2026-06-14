@@ -110,7 +110,8 @@ func run() int {
 			messaging.SessionStartedRoutingKey,
 			messaging.SessionEndedRoutingKey,
 		},
-		Prefetch: cfg.ConsumePrefetch,
+		Prefetch:    cfg.ConsumePrefetch,
+		DLXExchange: messaging.LeaderboardDLXExchange,
 	}
 
 	// busConnected drives the served bundle's stale flag (Story 1.10). It starts

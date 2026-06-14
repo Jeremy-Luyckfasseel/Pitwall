@@ -9,16 +9,16 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// Publisher owns the AMQP connection + channels and the service's own durable
-// topic exchange. It publishes only to that exchange (blueprint §Messaging).
+// Publisher owns the AMQP connection + channels and the service's own durable topic
+// exchange. It publishes only to that exchange (blueprint §Messaging).
 //
-// Story 1.10 makes it reconnect-aware: amqp091-go does NOT auto-recover a dropped
-// connection, so the Publisher's own supervisor (ConnectAndServe) re-dials with
-// capped-exponential backoff and re-declares the exchange + reopens the confirm
-// channel after a bus restart. The connection/channels live behind a mutex; the
-// publish methods read the CURRENT channel, so the relay's and heartbeat's
-// captured closures keep working across a reconnect (a publish made while
-// disconnected returns an error — never a false success).
+// It is reconnect-aware: amqp091-go does NOT auto-recover a dropped connection, so the
+// Publisher's own supervisor (ConnectAndServe) re-dials with capped-exponential
+// backoff and re-declares the exchange + reopens the confirm channel after a bus
+// restart. The connection/channels live behind a mutex; the publish methods read the
+// CURRENT channel, so a relay's and heartbeat's captured closures keep working across
+// a reconnect (a publish made while disconnected returns an error — never a false
+// success).
 type Publisher struct {
 	uri      string
 	exchange string
@@ -30,10 +30,10 @@ type Publisher struct {
 	closed  chan struct{} // closes when the CURRENT connection dies
 }
 
-// Dial connects to the broker, opens the channels and declares the durable topic
-// exchange (fail-fast at startup). The caller must Close the publisher on
+// DialPublisher connects to the broker, opens the channels and declares the durable
+// topic exchange (fail-fast at startup). The caller must Close the publisher on
 // shutdown. To survive a mid-session bus kill, call ConnectAndServe afterwards.
-func Dial(uri, exchange string) (*Publisher, error) {
+func DialPublisher(uri, exchange string) (*Publisher, error) {
 	p := &Publisher{uri: uri, exchange: exchange}
 	if _, err := p.establish(context.Background()); err != nil {
 		return nil, err
@@ -42,9 +42,9 @@ func Dial(uri, exchange string) (*Publisher, error) {
 }
 
 // establish opens one connection generation: dial, open the heartbeat + confirm
-// channels, declare the durable exchange, swap them in under the lock, and return
-// a channel that closes when THIS connection dies. Re-run on every reconnect, so
-// the exchange is re-declared on a fresh broker process.
+// channels, declare the durable exchange, swap them in under the lock, and return a
+// channel that closes when THIS connection dies. Re-run on every reconnect, so the
+// exchange is re-declared on a fresh broker process.
 func (p *Publisher) establish(_ context.Context) (<-chan struct{}, error) {
 	conn, err := amqp.Dial(p.uri)
 	if err != nil {
@@ -83,24 +83,24 @@ func (p *Publisher) establish(_ context.Context) (<-chan struct{}, error) {
 	return closed, nil
 }
 
-// ConnectAndServe supervises the connection established by Dial: it adopts the
-// live connection, then on every drop re-dials (capped-exponential backoff),
+// ConnectAndServe supervises the connection established by DialPublisher: it adopts
+// the live connection, then on every drop re-dials (capped-exponential backoff),
 // reopens the channels and re-declares the exchange — reporting connected<->lost
 // through onState (nil-safe). It returns immediately (the supervisor runs in the
-// background) and stops when ctx is cancelled. Dial must have succeeded first
-// (fail-fast); ConnectAndServe never re-dials the first generation.
+// background) and stops when ctx is cancelled. DialPublisher must have succeeded
+// first (fail-fast); ConnectAndServe never re-dials the first generation.
 func (p *Publisher) ConnectAndServe(ctx context.Context, log *slog.Logger, onState func(connected bool)) error {
 	p.mu.RLock()
 	adopted := p.closed
 	p.mu.RUnlock()
 	if adopted == nil {
-		return errors.New("ConnectAndServe called before a successful Dial")
+		return errors.New("ConnectAndServe called before a successful DialPublisher")
 	}
 	connect := func(ctx context.Context) (<-chan struct{}, error) {
 		if adopted != nil {
 			c := adopted
 			adopted = nil
-			return c, nil // adopt the connection Dial already established
+			return c, nil // adopt the connection DialPublisher already established
 		}
 		return p.establish(ctx)
 	}
@@ -109,10 +109,10 @@ func (p *Publisher) ConnectAndServe(ctx context.Context, log *slog.Logger, onSta
 	return nil
 }
 
-// Publish sends a persistent JSON message to the owned exchange with the given
-// routing key, using the CURRENT channel. A publish while disconnected returns an
-// error (the heartbeat then logs+skips, leaving the liveness file stale — the
-// honest bus-down signal).
+// Publish sends a persistent JSON message to the owned exchange with the given routing
+// key, using the CURRENT channel. A publish while disconnected returns an error (the
+// heartbeat then logs+skips, leaving the liveness file stale — the honest bus-down
+// signal).
 func (p *Publisher) Publish(ctx context.Context, routingKey string, body []byte) error {
 	p.mu.RLock()
 	ch := p.ch
@@ -127,12 +127,12 @@ func (p *Publisher) Publish(ctx context.Context, routingKey string, body []byte)
 	})
 }
 
-// PublishConfirmed publishes body to routingKey on the internal confirm channel
-// and blocks until the broker acks (or nacks/ctx-expires/connection-drops). A
-// nack, timeout, or dropped connection is a publish failure — the outbox row
-// stays pending and is retried; it is NEVER reported as a false success. This is
-// the production relay's Publisher (survives reconnect, unlike a ConfirmChannel
-// bound to a fixed channel).
+// PublishConfirmed publishes body to routingKey on the internal confirm channel and
+// blocks until the broker acks (or nacks/ctx-expires/connection-drops). A nack,
+// timeout, or dropped connection is a publish failure — the outbox row stays pending
+// and is retried; it is NEVER reported as a false success. This is the production
+// relay's Publisher (survives reconnect, unlike a ConfirmChannel bound to a fixed
+// channel).
 func (p *Publisher) PublishConfirmed(ctx context.Context, routingKey string, body []byte) error {
 	p.mu.RLock()
 	ch := p.confirm
@@ -158,9 +158,9 @@ func (p *Publisher) PublishConfirmed(ctx context.Context, routingKey string, bod
 	return nil
 }
 
-// OpenConfirmChannel opens a SEPARATE confirm-mode channel on the current
-// connection. Retained for tests that drive a relay directly; production uses
-// PublishConfirmed (reconnect-aware). The caller must Close it.
+// OpenConfirmChannel opens a SEPARATE confirm-mode channel on the current connection.
+// Retained for tests that drive a relay directly; production uses PublishConfirmed
+// (reconnect-aware). The caller must Close it.
 func (p *Publisher) OpenConfirmChannel() (*ConfirmChannel, error) {
 	p.mu.RLock()
 	conn := p.conn
@@ -179,18 +179,18 @@ func (p *Publisher) OpenConfirmChannel() (*ConfirmChannel, error) {
 	return &ConfirmChannel{ch: ch, exchange: p.exchange}, nil
 }
 
-// ConfirmChannel publishes persistent messages to the owned exchange and waits
-// for the broker's publisher-confirm ack. A nil error from PublishConfirmed means
-// the broker durably accepted the message — only then may the relay mark the
-// outbox row sent (AC1: sent only after ack).
+// ConfirmChannel publishes persistent messages to the owned exchange and waits for the
+// broker's publisher-confirm ack. A nil error from PublishConfirmed means the broker
+// durably accepted the message — only then may a relay mark the outbox row sent (sent
+// only after ack).
 type ConfirmChannel struct {
 	ch       *amqp.Channel
 	exchange string
 }
 
-// PublishConfirmed publishes body to routingKey and blocks until the broker acks
-// (or nacks, or ctx expires). A nack or timeout is a publish failure — the row
-// stays pending and is retried; it is NEVER reported as a false success.
+// PublishConfirmed publishes body to routingKey and blocks until the broker acks (or
+// nacks, or ctx expires). A nack or timeout is a publish failure — the row stays
+// pending and is retried; it is NEVER reported as a false success.
 func (c *ConfirmChannel) PublishConfirmed(ctx context.Context, routingKey string, body []byte) error {
 	dc, err := c.ch.PublishWithDeferredConfirmWithContext(ctx, c.exchange, routingKey, false, false, amqp.Publishing{
 		ContentType:  "application/json",
