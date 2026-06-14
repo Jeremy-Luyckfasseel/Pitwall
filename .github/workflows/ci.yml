@@ -20,6 +20,7 @@ jobs:
       services: ${{ steps.filter.outputs.services }}
       libs: ${{ steps.filter.outputs.libs }}
       e2e: ${{ steps.filter.outputs.e2e }}
+      deploy: ${{ steps.filter.outputs.deploy }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -46,6 +47,16 @@ jobs:
               - 'services/**'
               - 'contract/**'
               - 'libs/**'
+            deploy:
+              # The per-service deploy pipeline (Story 1.12): release workflow, prod overlay,
+              # poller + its selection logic, the shared tag parser, and the validity gates.
+              - 'deploy/**'
+              - '.github/workflows/release.yml'
+              - 'docker-compose.yml'
+              - 'docker-compose.prod.yml'
+              - 'scripts/parse-service-tag.sh'
+              - 'scripts/check-prod-compose.sh'
+              - 'scripts/check-release-workflow.sh'
 
   schema-lint:
     needs: changes
@@ -197,6 +208,28 @@ jobs:
         env:
           CONFORMANCE_LANE: quarantine
         run: go test -tags=integration -timeout 900s ./...
+
+  deploy-gates:
+    # The per-service deploy pipeline (Story 1.12). Unit-tests the pure logic (tag parser + poller
+    # selection + poller behaviour with stubbed git/docker) and asserts the artifact invariants
+    # (release.yml is tag-only / no-SSH; the merged prod stack pulls public GHCR images, binds the
+    # board loopback-only, has no `version:`, and fails fast without real creds). All client-side —
+    # NO image build here (that is release.yml, tag-only — AR17 keeps the per-PR pipeline build-free).
+    needs: changes
+    if: ${{ needs.changes.outputs.deploy == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag parser unit tests
+        run: sh scripts/test-parse-service-tag.sh
+      - name: Poller selection unit tests
+        run: sh deploy/test-select-deploys.sh
+      - name: Poller behaviour test (stubbed git/docker/flock)
+        run: bash deploy/test-poller-deploy.sh
+      - name: Release-workflow invariants (tag-only, no SSH, public GHCR push)
+        run: sh scripts/check-release-workflow.sh
+      - name: Prod-compose validity (GHCR images, loopback board, no version:, creds-fail-fast)
+        run: sh scripts/check-prod-compose.sh
 
   conventional-commits:
     # Conventional Commits gate the squash merge; enforce on PRs (the PR commits / title).
