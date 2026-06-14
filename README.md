@@ -96,6 +96,16 @@ Per `docs/analysis/03-engineering-standards.md`, every change passes four layers
    (`make smoke`; see [`tests/conformance/`](tests/conformance/)). This is the required merge
    gate; a flaky scenario goes to a non-blocking **quarantine lane**, never `@skip`.
 
+## Deploy — per-service tag → GHCR → VPS pull (ADR-0007)
+
+Local Compose is dev/staging; the **VPS hosts production only**. Deploy is **tag-driven, not
+branch-driven** — merging to `main` never deploys. Pushing a **per-service tag** `‹svc›-vX.Y.Z`
+(e.g. `timing-v0.1.0`) builds **only that service's** image and pushes it to **public GHCR**
+([`.github/workflows/release.yml`](.github/workflows/release.yml)); a **pull-based poller** on the
+VPS picks up the new image and recreates **only that container** (no server build, no inbound SSH).
+Rollback = redeploy the previous immutable GHCR image. Full operator runbook + the shared-VPS
+guardrails: [`deploy/README.md`](deploy/README.md).
+
 ## Project status & roadmap
 
 - ✅ **Analysis & design** — architecture, ADRs, per-service specs, and the message contract.
