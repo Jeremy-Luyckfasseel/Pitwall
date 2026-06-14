@@ -1,8 +1,15 @@
 # Pitwall — production override (VPS only — ADR-0007). Compose Specification (NO `version:` field).
 # Apply layered over the base file:
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   docker compose -p pitwall -f docker-compose.yml -f docker-compose.prod.yml up -d
 # Keep this minimal: it adjusts only what must differ in prod. Per-service prod settings are added
 # here as each service ships.
+#
+# Deploy model (Round 29 / ADR-0007): per-service tags `‹svc›-vX.Y.Z` build in CI and push to PUBLIC
+# GHCR; the VPS PULLS the image and recreates only that container (the server NEVER builds). So in prod
+# each service runs from `image:` (not `build:`) and the deploy path is `pull` + `up -d --no-build`.
+# Image versions come from the VPS .env (`TIMING_VERSION` / `LEADERBOARD_VERSION`); rollback = pin the
+# previous version and pull (immutable images, no rebuild). NO secret lives here — real creds + the
+# board's loopback port come from the VPS .env at runtime (NFR20); the VPS host/IP appears in NO file.
 name: pitwall
 
 services:
@@ -13,3 +20,19 @@ services:
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set a real RABBITMQ_PASSWORD in the VPS .env}
       RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/}
     restart: always
+
+  timing:
+    # Pulled from public GHCR — never built on the server (ADR-0007). The base file's build: stanza is
+    # ignored on the deploy path (`pull` + `up -d --no-build`); image: is what prod runs.
+    image: ghcr.io/jeremy-luyckfasseel/pitwall-timing:${TIMING_VERSION:?set TIMING_VERSION (the deployed image tag) in the VPS .env}
+    pull_policy: always
+    restart: always
+
+  leaderboard:
+    image: ghcr.io/jeremy-luyckfasseel/pitwall-leaderboard:${LEADERBOARD_VERSION:?set LEADERBOARD_VERSION (the deployed image tag) in the VPS .env}
+    pull_policy: always
+    restart: always
+    # The trackside board stays LOOPBACK-only (Q29.3) — the base file already binds
+    # 127.0.0.1:${LEADERBOARD_HTTP_PORT:-8080}:8080. On the VPS set LEADERBOARD_HTTP_PORT to a
+    # NON-COLLIDING port (8080 = dozzle, 8081 = the other project's dashboard — Q29.4). Viewed via an
+    # SSH tunnel; no public ingress, no firewall change.
