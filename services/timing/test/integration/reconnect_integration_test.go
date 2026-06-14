@@ -24,7 +24,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 
-	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/logging"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/logging"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/messaging"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/persistence"
 )

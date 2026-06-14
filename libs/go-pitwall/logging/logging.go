@@ -1,7 +1,8 @@
-// Package logging provides the service's single structured-JSON logger
-// (blueprint §Observability). Every line carries timestamp, level, service and
-// correlationId. There is intentionally no other logging entrypoint in the
-// service — no bare fmt.Print*/println to stdout (AC2, NFR20).
+// Package logging provides the shared structured-JSON logger for every Pitwall Go
+// service (blueprint §Observability). Every line carries timestamp, level, service
+// and correlationId. It is intended to be the service's single logging entrypoint —
+// no bare fmt.Print*/println to stdout (NFR20; enforced by each service's and the
+// library's hygiene guard test).
 package logging
 
 import (

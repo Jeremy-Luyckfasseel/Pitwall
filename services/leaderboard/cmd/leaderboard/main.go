@@ -25,7 +25,7 @@ import (
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/consumer"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/domain"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/heartbeat"
-	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/logging"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/logging"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/messaging"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/persistence"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/web"
