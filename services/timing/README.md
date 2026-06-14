@@ -140,15 +140,18 @@ when the simulator is on because that is the only crossing source today (Epic 1)
 ```
 cmd/timing/main.go            # wiring + graceful shutdown + real outbox flush + simulator goroutine
 internal/config/             # env loading + fail-fast validation (incl. simulator knobs)
-internal/logging/            # the single structured-JSON logger
-internal/messaging/          # envelope + domain-event builders, validate-on-publish (+ data-schema
-                             #   index), exchange, publisher + confirm-mode channel
-internal/persistence/        # SQLite open + pragmas, goose migrations, the outbox store
-internal/relay/              # the outbox relay loop + EnqueueEnvelope / NewEnqueuer producer seam
+internal/messaging/          # FACADE over libs/go-pitwall/messaging: Timing's exchange + routing-key
+                             #   constants + domain-event builders/types (the envelope codec,
+                             #   validator, publisher live in the lib — Story 2.1)
+internal/persistence/        # FACADE over libs/go-pitwall/persistence: Timing's migrations (outbox
+                             #   table DDL) + Open wiring (db/outbox mechanics live in the lib)
+internal/relay/              # FACADE over libs/go-pitwall/relay (outbox relay + producer seam)
 internal/domain/             # pure crossing -> lap rule (start marker, per-driver delta/lapNumber, min-lap filter)
 internal/simulator/          # the env-toggled simulator: drivers, distribution, session lifecycle
-internal/heartbeat/          # 1 s emitter + liveness touch-file
+internal/heartbeat/          # FACADE over libs/go-pitwall/heartbeat (1 s emitter + liveness touch-file)
 internal/hygiene/            # source guard test (no bare prints)
+# Shared blueprint mechanics (logger, envelope+validator, outbox/inbox, messaging
+# runtime, relay, heartbeat, erasure) live ONCE in libs/go-pitwall (replace-pinned).
 test/integration/            # testcontainers RabbitMQ end-to-end (heartbeat + outbox + simulator stream)
 Dockerfile · healthcheck.sh  # multi-stage build (context = repo root); bus-only health
 ```
