@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/messaging"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/messaging"
 )
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewJSONHandler(io.Discard, nil)) }
@@ -22,7 +22,7 @@ func newEmitter(t *testing.T, validate Validator, publish Publisher) (*Emitter, 
 		Interval:     5 * time.Millisecond,
 		LivenessFile: live,
 		Build: func(now time.Time) messaging.Envelope {
-			return messaging.NewHeartbeatEnvelope("timing", "inst", "cid", now)
+			return messaging.NewHeartbeatEnvelope("svc", "inst", "cid", now)
 		},
 		Validate: validate,
 		Publish:  publish,
@@ -68,8 +68,8 @@ func TestEmitter_PublishesAndTouchesLivenessFile(t *testing.T) {
 	}
 }
 
-// An invalid heartbeat must be dropped: not published, and the liveness file must
-// not be touched (blueprint: invalid out -> log + drop).
+// An invalid heartbeat must be dropped: not published, and the liveness file must not
+// be touched (blueprint: invalid out -> log + drop).
 func TestEmitter_DropsInvalidHeartbeat_NoPublishNoTouch(t *testing.T) {
 	published := false
 	publish := func(ctx context.Context, rk string, body []byte) error { published = true; return nil }
