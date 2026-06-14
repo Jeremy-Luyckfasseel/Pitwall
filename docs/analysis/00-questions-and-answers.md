@@ -1182,3 +1182,58 @@ a **new required `ci.yml` job (`e2e-smoke`)** gates merges (NFR23). A **flaky** 
 `@skip`** (AR16). *(Scope: this pins the harness location + module shape + the `make`/CI entrypoints for the
 whole platform; later languages add a sibling runner under `tests/conformance/<lang>/` against the same
 `scenarios/*.yaml`.)*
+
+## Round 29 — VPS deploy: trigger mechanism, GHCR visibility & prod board reachability (2026-06-14)
+
+> Decided during the build phase (Epic 1, **Story 1.12** — deploy the walking skeleton to the VPS). The
+> *design* was already pinned: **ADR-0007** (monorepo; **per-service tags `‹svc›-vX.Y.Z`** build → **GHCR**
+> → **VPS pulls** + recreates only that container; deploy ≠ merge; rollback = redeploy the previous
+> immutable GHCR tag, no server rebuild) and **engineering-standards §6** ("CI holds only GHCR + SSH deploy
+> creds"; "Secrets: `.env` on the VPS"). What was **not pinned anywhere** — and the docs forbid inventing —
+> was the concrete *deploy trigger mechanism* (push-from-CI vs VPS-pull poller), the *GHCR package
+> visibility*, and *how the prod leaderboard board is "reachable"* on a VPS that has **no reverse proxy, no
+> domain, and no public web port** and is **shared with another live project** (AI-bot: `rules_bot_*` +
+> `dozzle`; `127.0.0.1:8080`/`8081` already taken). All three are answered here before building. **No new
+> ADR** — this realizes ADR-0007's pipeline within the existing architecture, changing no decision.
+>
+> **Standing constraint (Jeremy, this round):** the repo is **public**, so **no secret may ever be
+> committed — especially the VPS IP**. Repo artifacts use placeholders / CI-or-VPS-side secrets only; the
+> host lives solely in the VPS-side gitignored `.env` and the operator's local tooling.
+
+**Q29.1 — What triggers the per-service deploy: CI pushes (SSH) or the VPS pulls (poller)?**
+A: **VPS-side pull poller** (reuse the proven pattern already running the other project). A flock-guarded
+script on a **systemd timer** (mirroring the existing `rules-deploy.timer` → `rules-deploy.service`) polls
+`git fetch --tags`, finds the newest `‹svc›-vX.Y.Z` tag, and for the changed service runs **`docker compose
+pull <svc>` + `up -d <svc>`** against the GHCR image (no `--build`: images are built in CI, never on the
+server — ADR-0007). Per-service deployed state is tracked in a `.deployed_tags` marker. Rationale: (1) it is
+**pull-based, so CI needs no inbound SSH and no SSH secrets** — the single biggest secret-leak risk on a
+public repo is removed (satisfies the standing constraint above), and the "CI holds … SSH deploy creds" line
+in eng-standards §6 is **superseded for the poller path** (CI holds only GHCR push, which is the automatic
+`GITHUB_TOKEN`); (2) it **matches infrastructure the operator already runs and trusts** on this exact VPS;
+(3) it still satisfies ADR-0007 literally — "the **VPS pulls** + recreates only that container". *Rejected:*
+**CI SSHes into the VPS** (push-based, immediate, but requires storing an SSH deploy key as a repo secret on
+a public repo and an inbound trust path — more attack surface for no benefit here).
+
+**Q29.2 — Are the GHCR images public or private?**
+A: **Public packages.** Built as `ghcr.io/jeremy-luyckfasseel/pitwall-<svc>`. The repo is already public, so
+the VPS pulls **with no `docker login`** — fewer secrets, fewer moving parts, and appropriate for an open
+portfolio project. *Rejected:* private packages (would force a `read:packages` PAT onto the VPS for no
+confidentiality gain here).
+
+**Q29.3 — How is the production leaderboard board "reachable"?**
+A: **Loopback-only on the VPS, reached via an SSH tunnel** — no public surface. The board binds to
+`127.0.0.1:<port>` on the VPS (same posture as the existing `dozzle`/dashboard), and the operator views it
+by tunnelling (`ssh -L`). The board is **read-only and unauthenticated** (Round 26 — the browser never sends
+a domain event), so exposing it publicly is an unnecessary risk; loopback keeps the attack surface at zero
+and changes no firewall rule. A **Cloudflare Tunnel** (free, outbound-only, would give a stable HTTPS URL
+with no inbound ports) was the preferred *production-like* option and is the documented **future upgrade**,
+but it needs a Cloudflare account + a zone the operator does not currently want to set up; **safest wins for
+the walking skeleton.** *(AC note: the deploy story's "live board is reachable in prod" is satisfied via the
+SSH tunnel; "bus-only health" is unchanged — heartbeats + the touch-file Docker healthcheck, no HTTP
+`/health`.)*
+
+**Q29.4 — Which host port does the prod board bind, given `8080`/`8081` are taken by the other project?**
+A: A **non-colliding loopback port** in the prod overlay (`docker-compose.prod.yml`), leaving the
+in-container `:8080` unchanged — the base file's `127.0.0.1:${LEADERBOARD_HTTP_PORT:-8080}:8080` is
+overridden on the VPS via `LEADERBOARD_HTTP_PORT` in the VPS `.env` so it never clashes with `dozzle`
+(`8080`) or the AI-bot dashboard (`8081`). The exact value is VPS-`.env` config, not committed.
