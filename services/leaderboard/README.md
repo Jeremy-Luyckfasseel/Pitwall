@@ -210,16 +210,20 @@ npm run dev        # local dev server, proxies /events to a running leaderboard 
 ```
 cmd/leaderboard/main.go       # wiring + graceful shutdown (consumer + heartbeat + SSE server)
 internal/config/             # env loading + fail-fast validation
-internal/logging/            # the single structured-JSON logger
-internal/messaging/          # envelope + consume-decode, validate-on-consume (+ data-schema index),
-                             #   own exchange + publisher, the consumer queue (bind to timing.events) + Delivery
-internal/persistence/        # SQLite open + pragmas, goose migrations, inbox + sessions + session-keyed
-                             #   standings store (atomic ApplyLap/ApplySessionStarted/ApplySessionEnded; CurrentBoard)
+internal/messaging/          # FACADE over libs/go-pitwall/messaging: Leaderboard's own/DLX exchange +
+                             #   consumed routing-key constants + domain decoders (the envelope codec,
+                             #   validator, consumer Bus + DLQ live in the lib — Story 2.1)
+internal/persistence/        # FACADE over libs/go-pitwall/persistence: Leaderboard's migrations (inbox +
+                             #   sessions + session-keyed standings) + the read-model store (atomic
+                             #   ApplyLap/ApplySessionStarted/ApplySessionEnded; CurrentBoard)
 internal/domain/             # pure standings ordering + first-to-set tie-break + short-masterId fallback
 internal/consumer/           # validate -> dedupe -> apply (atomic) -> ack/nack; Notify hook to the web layer
 internal/web/                # SSE hub + //go:embed SPA + render mapper incl. session status (dist = Vite output)
 web/                         # Vite + React + TS source for the leaderboard-row board (UX-DR8)
+internal/heartbeat/          # FACADE over libs/go-pitwall/heartbeat (1 s emitter + liveness touch-file)
 internal/hygiene/            # source guard test (no bare prints)
+# Shared blueprint mechanics (logger, envelope+validator, outbox/inbox, messaging
+# runtime, relay, heartbeat, erasure) live ONCE in libs/go-pitwall (replace-pinned).
 test/integration/            # testcontainers RabbitMQ end-to-end (Timing -> Leaderboard -> standings -> SSE)
 Dockerfile · healthcheck.sh  # multi-stage build (node bundle -> go embed -> alpine; context = repo root); bus-only health
 ```

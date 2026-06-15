@@ -1,73 +1,44 @@
-// Package persistence owns the Leaderboard service's private database: the SQLite
-// connection (pure-Go modernc driver, so the CGO_ENABLED=0 static build holds),
-// the versioned schema migrations, and the read-model stores — a durable
-// idempotent inbox (dedupe on envelope id, M6) and the best-lap standings
-// projection. The projection owns NO canonical state (FR41: a pure fold of
-// consumed events, fully rebuildable). The pattern mirrors
-// services/timing/internal/persistence; libs/go-pitwall extraction is Story 2.1.
+// Package persistence is Leaderboard's database facade over the shared persistence
+// blueprint mechanics in libs/go-pitwall/persistence. The SQLite open/pragmas, the
+// goose migration runner, the WithinTx seam and the idempotent inbox helpers now live
+// ONCE in the library (Story 2.1); this package owns Leaderboard's migrations (inbox +
+// the session-keyed standings projection) and the read-model store (store.go),
+// re-exporting the generic types so existing call sites keep working unchanged.
 package persistence
 
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"fmt"
-	"net/url"
 
-	_ "modernc.org/sqlite" // registers the pure-Go "sqlite" driver
+	gopdb "github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/persistence"
 )
 
-// Open opens (creating if absent) the SQLite database at dbPath, applies the
-// connection pragmas, and runs migrations to the latest version. It is the
-// single startup entrypoint for persistence.
+// migrationsFS holds Leaderboard's versioned schema-as-code migrations, embedded into
+// the binary. New migrations are added as 000N_*.sql files alongside this package.
 //
-// SQLite is a single-writer store; the pool is pinned to one connection so the
-// consumer's writes and the web layer's reads serialize cleanly with no
-// SQLITE_BUSY races. Callers MUST use the *sql.Tx inside WithinTx (never the
-// *sql.DB directly) while a transaction is open, or they will deadlock the conn.
-func Open(ctx context.Context, dbPath string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", dsnFor(dbPath))
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite at %q: %w", dbPath, err)
-	}
-	db.SetMaxOpenConns(1)
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
 
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("ping sqlite at %q: %w", dbPath, err)
-	}
-	if err := migrate(ctx, db); err != nil {
-		_ = db.Close()
+// Open opens (creating if absent) the SQLite database at dbPath, applies the standard
+// connection pragmas, and runs Leaderboard's migrations to the latest version. It is
+// the single startup entrypoint for persistence.
+func Open(ctx context.Context, dbPath string) (*sql.DB, error) {
+	db, err := gopdb.Open(ctx, dbPath)
+	if err != nil {
 		return nil, err
+	}
+	if err := gopdb.Migrate(ctx, db, migrationsFS, "migrations"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate leaderboard db: %w", err)
 	}
 	return db, nil
 }
 
-// dsnFor builds a modernc.org/sqlite DSN with the pragmas applied on every
-// connection: WAL journal, a busy timeout, and foreign-key enforcement.
-func dsnFor(dbPath string) string {
-	q := url.Values{}
-	q.Add("_pragma", "busy_timeout(5000)")
-	q.Add("_pragma", "journal_mode(WAL)")
-	q.Add("_pragma", "foreign_keys(on)")
-	return "file:" + dbPath + "?" + q.Encode()
-}
-
-// WithinTx runs fn inside a single transaction, committing if fn returns nil and
-// rolling back otherwise. This is the seam the atomic CONSUME rests on: the
-// inbox dedupe-check, the projection upsert, and the inbox insert all commit
-// together or not at all, so a crash can neither double-apply nor apply-without-
-// marking (the consumer-side mirror of Timing's transactional outbox).
+// WithinTx runs fn inside a single transaction (commit on nil, rollback otherwise) —
+// the seam the atomic CONSUME rests on (inbox dedupe-check + projection upsert + inbox
+// insert all commit together).
 func WithinTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit tx: %w", err)
-	}
-	return nil
+	return gopdb.WithinTx(ctx, db, fn)
 }

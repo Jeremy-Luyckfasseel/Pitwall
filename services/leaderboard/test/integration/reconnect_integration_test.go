@@ -263,7 +263,8 @@ func startReconnectConsumerDB(t *testing.T, amqpURL, dbPath string) (*persistenc
 			messaging.SessionStartedRoutingKey,
 			messaging.SessionEndedRoutingKey,
 		},
-		Prefetch: 16,
+		Prefetch:    16,
+		DLXExchange: messaging.LeaderboardDLXExchange,
 	}, quietLog(), func(connected bool) {
 		busConnected.Store(connected)
 		server.Publish()

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	gopdb "github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/persistence"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/leaderboard/internal/domain"
 )
 
@@ -273,26 +274,16 @@ func ensureSession(ctx context.Context, tx *sql.Tx, sessionID, initialStatus, st
 	return n > 0, nil
 }
 
+// hasSeen / markSeen delegate to the shared idempotent-inbox mechanics in
+// libs/go-pitwall/persistence (dedupe on envelope id, atomic with the projection
+// write inside the caller's tx). The `inbox` table DDL lives in this service's
+// migrations.
 func hasSeen(ctx context.Context, tx *sql.Tx, id string) (bool, error) {
-	var one int
-	err := tx.QueryRowContext(ctx, `SELECT 1 FROM inbox WHERE id = ?`, id).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("inbox lookup: %w", err)
-	}
-	return true, nil
+	return gopdb.InboxHasSeen(ctx, tx, id)
 }
 
 func markSeen(ctx context.Context, tx *sql.Tx, id, eventType, processedAt string) error {
-	_, err := tx.ExecContext(ctx,
-		`INSERT INTO inbox (id, type, processed_at) VALUES (?, ?, ?)`,
-		id, eventType, processedAt)
-	if err != nil {
-		return fmt.Errorf("inbox insert: %w", err)
-	}
-	return nil
+	return gopdb.InboxMarkSeen(ctx, tx, id, eventType, processedAt)
 }
 
 func getBest(ctx context.Context, tx *sql.Tx, sessionID, masterID string) (*domain.DriverBest, error) {

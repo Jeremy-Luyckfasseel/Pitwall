@@ -13,7 +13,7 @@ import (
 )
 
 // AC2: structured logging only — no bare fmt.Print*/println to stdout anywhere in
-// the service's production code. The logger (internal/logging) is the only sink.
+// the service's production code. The shared logger (libs/go-pitwall/logging) is the only sink.
 // This inspects the AST (not text) so doc comments and strings never false-positive.
 func TestNoBarePrintStatements(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)

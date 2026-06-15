@@ -15,8 +15,16 @@ COPY services/leaderboard/web/ ./web/
 RUN cd web && npm run build
 
 # --- build stage: compile the Go binary with the bundle embedded ------------
+# Build context = repo ROOT so the shared blueprint lib (libs/go-pitwall, pinned via a
+# `replace` in go.mod) is in the context. GOWORK=off: the container build uses the
+# per-service go.mod replace, NOT the repo-root go.work (dev-only). The repo layout is
+# preserved under /src so `replace … => ../../libs/go-pitwall` resolves.
 FROM golang:1.26.4 AS build
+ENV GOWORK=off
 WORKDIR /src
+COPY libs/go-pitwall/ ./libs/go-pitwall/
+
+WORKDIR /src/services/leaderboard
 COPY services/leaderboard/go.mod services/leaderboard/go.sum ./
 RUN go mod download
 COPY services/leaderboard/ ./

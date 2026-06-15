@@ -75,7 +75,13 @@ docs/
 contract/
   schemas/         the envelope + per-event JSON Schemas
   examples/        a worked example per event
+libs/
+  go-pitwall/      shared Go blueprint mechanics (envelope, validator, outbox/inbox,
+                   messaging supervisor/publisher/Bus/DLQ, relay, heartbeat, erasure
+                   scaffold) — extracted from the skeleton, semver'd, replace-pinned
 services/          the polyglot services (each: own Dockerfile, DB, tests)
+go.work            repo-root Go workspace — LOCAL multi-module dev only (containers
+                   build with GOWORK=off via each service's go.mod replace)
 tests/
   contract/        contract-layer validation (pytest against /contract)
   conformance/     the cross-language conformance harness + e2e smoke (4th gate)

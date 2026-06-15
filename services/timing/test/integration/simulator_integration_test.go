@@ -17,7 +17,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/logging"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/logging"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/messaging"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/persistence"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/relay"

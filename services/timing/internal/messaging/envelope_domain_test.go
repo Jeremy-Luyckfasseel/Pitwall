@@ -9,6 +9,21 @@ import (
 // A fixture masterId that satisfies the lap schema's UUID-v4 pattern.
 const fixtureMasterID = "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21"
 
+// testValidator builds a /contract validator for the service's validate-on-publish
+// domain tests (the generic validator mechanics are tested in libs/go-pitwall).
+func testValidator(t *testing.T) *Validator {
+	t.Helper()
+	dir, err := ResolveContractDir("")
+	if err != nil {
+		t.Fatalf("ResolveContractDir: %v", err)
+	}
+	v, err := NewValidator(dir)
+	if err != nil {
+		t.Fatalf("NewValidator: %v", err)
+	}
+	return v
+}
+
 func mustMarshal(t *testing.T, env Envelope) []byte {
 	t.Helper()
 	b, err := json.Marshal(env)

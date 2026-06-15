@@ -19,7 +19,7 @@ import (
 
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/config"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/heartbeat"
-	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/logging"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/logging"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/messaging"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/persistence"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/relay"

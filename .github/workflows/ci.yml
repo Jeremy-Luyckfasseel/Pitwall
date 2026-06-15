@@ -108,6 +108,38 @@ jobs:
       - name: pytest — exhaustive contract validation
         run: python -m pytest tests/contract
 
+  libs-go:
+    # The shared Go blueprint library (libs/go-pitwall, Story 2.1): build + vet + unit
+    # tests for the extracted mechanics (logger, envelope+validator, persistence
+    # outbox/inbox, messaging supervisor/publisher/Bus/DLQ, relay, heartbeat, erasure
+    # scaffold). Broker-free (the supervisor uses a fake connector; persistence uses
+    # pure-Go SQLite), so no testcontainers here. The per-service jobs build AGAINST the
+    # lib (replace-pinned) but `go test ./...` in a service module does not run the lib's
+    # own tests — this job is their CI gate. Triggered by libs/** and the contract/**
+    # fan-out (the validator + erasure ack validate against /contract).
+    needs: changes
+    if: ${{ needs.changes.outputs.libs == 'true' || needs.changes.outputs.contract == 'true' }}
+    runs-on: ubuntu-latest
+    # GOWORK=off: test the lib standalone against its own go.mod/go.sum (the repo-root
+    # go.work is dev-only), so the cache key (go.sum) is correct. Story 2.1.
+    env:
+      GOWORK: "off"
+    defaults:
+      run:
+        working-directory: libs/go-pitwall
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+          cache-dependency-path: libs/go-pitwall/go.sum
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Unit tests
+        run: go test ./...
+
   timing-go:
     # The Timing Go service skeleton (Story 1.3). Build + vet + unit tests always; the
     # integration test stands up a REAL RabbitMQ via testcontainers (GitHub's ubuntu
@@ -116,6 +148,10 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.services == 'true' }}
     runs-on: ubuntu-latest
+    # GOWORK=off: build exactly like the container (per-service go.mod `replace` of
+    # libs/go-pitwall), not via the repo-root go.work (dev-only). Story 2.1.
+    env:
+      GOWORK: "off"
     defaults:
       run:
         working-directory: services/timing
@@ -144,6 +180,10 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.services == 'true' }}
     runs-on: ubuntu-latest
+    # GOWORK=off: build exactly like the container (per-service go.mod `replace` of
+    # libs/go-pitwall), not via the repo-root go.work (dev-only). Story 2.1.
+    env:
+      GOWORK: "off"
     defaults:
       run:
         working-directory: services/leaderboard
