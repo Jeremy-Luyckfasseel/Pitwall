@@ -38,10 +38,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXAMPLES_DIR = os.path.join(ROOT, "contract/examples")
 SCHEMAS_DIR = os.path.join(ROOT, "contract/schemas")
 
-# Namespaces where example<->invalid pairing is enforced. Scoped to the events
-# specified for this story (timing); other namespaces ship their invalid fixtures
-# in their own epics/stories and are reported EXEMPT until then (never silently).
-PAIRING_NAMESPACES = {"timing"}
+# Namespaces where example<->invalid pairing is enforced. A namespace joins this set
+# in the epic that owns it: timing (Epic 1) and identity (Epic 2, Story 2.2 — the
+# identity.resolved reply). Other namespaces ship their invalid fixtures in their own
+# epics/stories and are reported EXEMPT until then (never silently).
+# NB: identity.lookup_requested is filed under the `frontend` namespace (it is published
+# to the originating service's exchange — Q&A Round 30), so `frontend` is NOT pinned here
+# (its other events land in later epics); that one event still ships its invalid fixture.
+PAIRING_NAMESPACES = {"timing", "identity"}
 
 
 def load(path):
