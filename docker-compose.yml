@@ -137,7 +137,49 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  # Canonical-id issuer (Story 2.2): consumes identity.lookup_requested off
+  # frontend.events and replies identity.resolved on its own identity.events via the
+  # outbox. No published ports — liveness is bus-only (heartbeat + touch-file).
+  identity:
+    build:
+      context: .                            # repo root — the service needs /contract (outside its dir)
+      dockerfile: services/identity/Dockerfile
+    container_name: pitwall-identity
+    depends_on:
+      rabbitmq:
+        condition: service_healthy          # don't start until the broker is ready (no sleeps, AR17)
+    environment:
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-pitwall}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-change-me}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
+      HEARTBEAT_INTERVAL_MS: ${HEARTBEAT_INTERVAL_MS:-1000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SERVICE_NAME: identity                 # per-service (not the shared .env value)
+      LIVENESS_FILE: /tmp/pitwall-identity.live
+      CONTRACT_DIR: /contract               # the /contract tree COPYed into the image
+      DB_PATH: /data/identity.db            # private SQLite DB (identities + inbox + outbox)
+      SOURCE_EXCHANGE: ${IDENTITY_SOURCE_EXCHANGE:-frontend.events}  # the originating intent exchange (Q&A Round 30)
+      OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-200}
+      CONSUME_PREFETCH: ${CONSUME_PREFETCH:-16}
+      DLQ_MAX_ATTEMPTS: ${DLQ_MAX_ATTEMPTS:-5}            # Story 1.9 DLQ policy (Q&A Round 27)
+      DLQ_RETRY_BASE_MS: ${DLQ_RETRY_BASE_MS:-1000}       # exponential backoff: 1s -> 2s -> 4s -> 8s
+      DLQ_RETRY_MULTIPLIER: ${DLQ_RETRY_MULTIPLIER:-2}
+      DLQ_RETRY_MAX_MS: ${DLQ_RETRY_MAX_MS:-60000}
+    volumes:
+      - identity-data:/data                 # private DB survives `down` (without -v) and restarts
+    healthcheck:
+      # Bus-only liveness — touch-file freshness, never an HTTP /health (ADR-0004, NFR18).
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
 volumes:
   rabbitmq-data:
   timing-data:                              # Timing's private SQLite store (Story 1.4)
   leaderboard-data:                         # Leaderboard's private SQLite store (Story 1.7)
+  identity-data:                            # Identity's private SQLite store (Story 2.2)
