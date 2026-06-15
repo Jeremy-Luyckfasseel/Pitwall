@@ -1237,3 +1237,48 @@ A: A **non-colliding loopback port** in the prod overlay (`docker-compose.prod.y
 in-container `:8080` unchanged — the base file's `127.0.0.1:${LEADERBOARD_HTTP_PORT:-8080}:8080` is
 overridden on the VPS via `LEADERBOARD_HTTP_PORT` in the VPS `.env` so it never clashes with `dozzle`
 (`8080`) or the AI-bot dashboard (`8081`). The exact value is VPS-`.env` config, not committed.
+
+## Round 30 — Identity resolve-or-mint: contract placement & test scope (2026-06-15)
+
+> Decided during the build phase (Epic 2, **Story 2.2** — Identity resolves or mints exactly one
+> `masterId` per person). The *design* was already pinned: **FR1–FR3 / NFR15** (Identity is sole issuer,
+> de-dupes on email, stores only `masterId`+email+status+timestamps), **ADR-0003** (Identity as UUID
+> issuer), and the **`identity.resolved` schema** + the message-bus rule that **`.requested` intents are
+> published to the originating service's own exchange** (`02-message-bus-and-contracts.md` §"Note: intents
+> … originating service's own exchange"; `contract/README.md` Events rule). What was **not pinned** — and
+> the docs forbid inventing — were two build-time specifics surfaced by create-story for 2.2: (1) which
+> `/contract` namespace folder the **new** `identity.lookup_requested.v1` schema+example lives in (the tree
+> is mixed — `frontend/` holds the frontend-originated intents, but `privacy/privacy.erased` is filed
+> by-entity even though its source varies, and the message-bus catalog lists `identity.lookup_requested`
+> under a *logical* `### identity.events` grouping); and (2) how far 2.2's "e2e" test layer reaches given
+> the cross-language conformance harness today launches only the Timing+Leaderboard binaries. **No new ADR**
+> — these realize the existing identity design and contract rules, changing no decision.
+
+**Q30.1 — Which `/contract` namespace folder holds the new `identity.lookup_requested.v1` schema + example?**
+A: **`contract/schemas/frontend/` + `contract/examples/frontend/`.** It is filed with the other
+frontend-originated `.requested` intents (`profile.edit_requested`, `schedule.change_requested`,
+`session.control_requested`, `privacy.erasure_requested`, `privacy.export_requested`). This matches the
+normative rule that intents are published to the **originating** service's own exchange (`frontend.events`),
+which Identity binds its consumer queue to — so the folder reflects the physical publishing exchange. The
+test producer (a Frontend stand-in, since Frontend itself is Epic 5) emits the envelope with
+`source: "frontend"`. The message-bus catalog's `### identity.events` row for `identity.lookup_requested` is
+a **logical grouping, not the physical exchange** (same caveat the catalog already makes for `control.events`
+and `privacy.*`). The reply `identity.resolved` stays under `identity/` (it *is* published to
+`identity.events`, source `identity`). *Rejected:* filing the request under `identity/` to keep the
+request/reply pair co-located — appealing, but the folder would then misrepresent the publishing exchange and
+break the consistent "frontend intents live in `frontend/`" precedent. Counter (Bar/POS) walk-in
+registration (Q22.3, Epic 7) will publish the *same* `identity.lookup_requested` schema to `bar.events`;
+the single schema file is referenced from both — its folder marks the **primary** origin, not the only one.
+
+**Q30.2 — How far does Story 2.2's "e2e" test layer reach?**
+A: **Integration-only for 2.2; keep the existing conformance smoke green.** Resolve-or-mint is covered by
+**thorough per-service integration tests** (real RabbitMQ + SQLite via testcontainers): mint-on-unknown
+email, reuse-on-known email (no duplicate, no `isNew`), redelivery/replay idempotent (same email → same
+`masterId`), concurrent same-email race → exactly one `masterId` (unique-constraint single-writer),
+malformed lookup → log + dead-letter (DLQ), and bus-bounce survival via the outbox. The existing
+**Timing→Leaderboard cross-language conformance smoke stays green** — Identity is purely additive to it and
+is **not** wired into the conformance harness in this story. The harness is extended in **Story 2.3** (gate
+check-in), which is the first time Identity actually *chains* into a multi-service observable flow; doing it
+there avoids building harness scaffolding in 2.2 that 2.3 would rework. *Rejected:* teaching the conformance
+harness to launch the Identity binary + adding an identity scenario now (premature — no multi-service
+identity flow exists until 2.3).
