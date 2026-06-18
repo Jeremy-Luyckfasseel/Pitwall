@@ -23,8 +23,8 @@ import (
 
 	"github.com/google/uuid"
 
-	librelay "github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/relay"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/logging"
+	librelay "github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/relay"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/identity/internal/config"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/identity/internal/consumer"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/identity/internal/domain"

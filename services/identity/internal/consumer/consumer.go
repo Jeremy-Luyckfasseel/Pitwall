@@ -43,8 +43,8 @@ type Handler struct {
 	Validate  func([]byte) error // validate-on-consume (envelope + data); nil err = valid
 	Resolver  Resolver
 	Log       *slog.Logger
-	Notify    func()        // kick the relay after a fresh reply is enqueued (optional)
-	LookupKey string        // == messaging.LookupRequestedRoutingKey
+	Notify    func() // kick the relay after a fresh reply is enqueued (optional)
+	LookupKey string // == messaging.LookupRequestedRoutingKey
 
 	// DLQ wiring (Story 1.9). Policy decides retry-vs-park from the redelivery count;
 	// Retry republishes to the retry queue with backoff; Park routes terminally to the

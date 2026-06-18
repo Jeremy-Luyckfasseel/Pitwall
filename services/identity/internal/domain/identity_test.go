@@ -20,12 +20,12 @@ var v4Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab]
 // case/whitespace variants of one mailbox resolve to exactly one masterId (AC2).
 func TestNormalizeEmail(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"jeremy@example.com", "jeremy@example.com"}, // already canonical
-		{"Jeremy@Example.com", "jeremy@example.com"}, // case-folded
+		{"jeremy@example.com", "jeremy@example.com"},     // already canonical
+		{"Jeremy@Example.com", "jeremy@example.com"},     // case-folded
 		{"  jeremy@example.com  ", "jeremy@example.com"}, // surrounding spaces trimmed
-		{"\tFOO@X.COM\n", "foo@x.com"},                  // tabs/newlines + uppercase
+		{"\tFOO@X.COM\n", "foo@x.com"},                   // tabs/newlines + uppercase
 		{"", ""},                                         // empty stays empty
-		{"   ", ""},                                       // whitespace-only collapses to blank
+		{"   ", ""},                                      // whitespace-only collapses to blank
 	}
 	for _, c := range cases {
 		if got := domain.NormalizeEmail(c.in); got != c.want {

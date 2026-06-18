@@ -12,20 +12,21 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 
-	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/testcontainers/testcontainers-go"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 )
 
 func TestSurvivesBusBounceAndStillResolves(t *testing.T) {
 	c, amqpURL := startBrokerFixedPort(t)
-	rig := startIdentity(t, amqpURL, t.TempDir()+"/identity.db")
+	rig := startIdentity(t, amqpURL, filepath.Join(t.TempDir(), "identity.db"))
 	defer rig.stop()
 
 	// --- healthy: mint a masterId for an email.

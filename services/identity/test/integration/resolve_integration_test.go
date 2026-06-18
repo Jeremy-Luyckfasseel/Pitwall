@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/google/uuid"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/testcontainers/testcontainers-go"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 

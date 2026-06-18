@@ -72,11 +72,15 @@ func NewValidator(contractDir string) (*Validator, error) { return libmsg.NewVal
 
 // DialConsumer connects, opens a channel and declares Identity's own durable topic
 // exchange (for heartbeats); the consumer queue is declared by ConnectAndConsume.
-func DialConsumer(uri, ownExchange string) (*Bus, error) { return libmsg.DialConsumerBus(uri, ownExchange) }
+func DialConsumer(uri, ownExchange string) (*Bus, error) {
+	return libmsg.DialConsumerBus(uri, ownExchange)
+}
 
 // DialPublisher connects and declares Identity's own exchange for the confirm-mode
 // outbox relay that publishes identity.resolved.
-func DialPublisher(uri, exchange string) (*Publisher, error) { return libmsg.DialPublisher(uri, exchange) }
+func DialPublisher(uri, exchange string) (*Publisher, error) {
+	return libmsg.DialPublisher(uri, exchange)
+}
 
 // RetryQueueName / ParkingQueueName derive the DLQ queue names from the work queue.
 func RetryQueueName(workQueue string) string   { return libmsg.RetryQueueName(workQueue) }
