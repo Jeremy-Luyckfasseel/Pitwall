@@ -73,6 +73,18 @@ func TestLoad_RejectsNonIntHeartbeat(t *testing.T) {
 	}
 }
 
+// SHUTDOWN_TIMEOUT_MS must fail fast on a non-positive value, like every other int
+// knob — a 0/negative timeout yields an already-expired DB-open + shutdown-flush context.
+func TestLoad_RejectsNonPositiveShutdownTimeout(t *testing.T) {
+	for _, bad := range []string{"0", "-1"} {
+		env := requiredEnv()
+		env["SHUTDOWN_TIMEOUT_MS"] = bad
+		if _, err := config.Load(envMap(env)); err == nil {
+			t.Fatalf("SHUTDOWN_TIMEOUT_MS=%q should fail fast; got nil error", bad)
+		}
+	}
+}
+
 func TestLoad_HonoursOverrides(t *testing.T) {
 	env := requiredEnv()
 	env["SERVICE_NAME"] = "identity-2"

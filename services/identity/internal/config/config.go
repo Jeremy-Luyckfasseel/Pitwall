@@ -78,6 +78,9 @@ func Load(getenv func(string) string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if shutdown <= 0 {
+		return nil, fmt.Errorf("SHUTDOWN_TIMEOUT_MS must be a positive integer, got %d", shutdown)
+	}
 	pollInterval, err := intEnv(getenv, "OUTBOX_POLL_INTERVAL_MS", 200)
 	if err != nil {
 		return nil, err
