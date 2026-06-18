@@ -1282,3 +1282,45 @@ check-in), which is the first time Identity actually *chains* into a multi-servi
 there avoids building harness scaffolding in 2.2 that 2.3 would rework. *Rejected:* teaching the conformance
 harness to launch the Identity binary + adding an identity scenario now (premature — no multi-service
 identity flow exists until 2.3).
+
+## Round 31 — Identity email natural-key: normalization & wire validation (2026-06-18)
+
+> Surfaced by the **Story 2.2 code review** (three adversarial layers converged). The design pins Identity as
+> de-duplicating on **email** to issue **exactly one `masterId` per person** (FR1/FR2/FR3/NFR15, ADR-0003),
+> but **no document specified the canonical form of that email** nor how its shape is enforced on the wire. As
+> built, Identity keyed `UNIQUE(email)` on the raw string (SQLite binary, case-sensitive) and stored the value
+> untrimmed, so `Jeremy@x.com`, `jeremy@x.com`, and `" jeremy@x.com "` would mint **different** `masterId`s —
+> contradicting AC2 ("exactly one canonical id per person"). Separately, the `email` field carried only
+> JSON-Schema `format: "email"`, which is **annotation-only (not asserted)** in the repo's validator (see
+> `libs/go-pitwall/messaging/validate_test.go` — "format is annotation-only, so this must be caught by the
+> pinned pattern"), so `"xxx"` validated and could be stored as a person's natural key. Per the golden rule
+> (CLAUDE.md §0) these unspecified behaviors were **asked, not assumed**. **No new ADR** — this realizes the
+> existing FR1–FR3 / NFR15 de-dup intent and the `contract/README.md` "validate every message" rule; it
+> changes no architectural decision.
+
+**Q31.1 — What is the canonical form of the email natural key, and where is it normalized?**
+A: **Identity normalizes — trim surrounding whitespace and lowercase the entire address — before it
+de-duplicates, stores, and echoes the value.** Identity is the **authoritative** point of normalization: it
+does not trust producers to send a canonical form (the lookup can originate from Frontend online registration,
+and later the Bar/POS counter walk-in — Q22.3/Epic 7 — so relying on every producer to normalize is fragile).
+The normalized form is used as the single key for both the `INSERT … ON CONFLICT(email)` and the post-conflict
+`SELECT`, is the value persisted in `identities.email`, and is the `data.email` echoed in `identity.resolved`.
+Consequence: case- and whitespace-variant addresses for one person resolve to **one** `masterId`, satisfying
+AC2. *Rejected:* (a) a wire-contract rule mandating senders submit trimmed-lowercase email — pushes the
+guarantee onto every current and future producer and still needs a defensive normalize in Identity, so it adds
+a cross-language wire rule for no extra safety; (b) trim-only / case-sensitive (RFC-5321-strict local part) —
+technically defensible but wrong for this platform, where one human with one mailbox must be one person.
+
+**Q31.2 — How is email *shape* enforced on the wire (since `format` is annotation-only)?**
+A: **Add a pragmatic email `pattern` to the schema** (`^[^@\s]+@[^@\s]+\.[^@\s]+$` — a non-empty local part,
+an `@`, and a dotted domain, no embedded whitespace) on the `email` field of **both**
+`frontend/identity.lookup_requested.v1` and `identity/identity.resolved.v1`, plus a known-bad fixture whose
+**email** is the sole reason for rejection (a valid `requestId`, a malformed email) so the pattern is proven to
+bite. This mirrors how the corpus already pins `requestId`/`masterId` via an explicit `pattern` rather than
+relying on `format`. The pattern is **case-tolerant** (allows uppercase) because validate-on-consume runs on
+the **raw** envelope *before* Identity normalizes — the producer may legitimately send `Foo@X.com`. *Rejected:*
+enabling format-assertion globally in the shared validator — correct in spirit but a corpus-wide, cross-language
+behavior change with a large blast radius; out of scope for a Story 2.2 review fix and better raised as its own
+decision. Also pinned: `identity.resolved.masterId` now carries the strict **v4** `pattern`
+(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`), matching the `lap.recorded`
+precedent and AC1's "lowercase UUID-v4" requirement (it previously had `format: "uuid"` only).
