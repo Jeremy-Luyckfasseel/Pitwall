@@ -10,6 +10,8 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"hash/fnv"
 	"math/rand"
 	"path/filepath"
 	"testing"
@@ -23,6 +25,20 @@ import (
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/relay"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/simulator"
 )
+
+// fakeResolveID stands in for the Identity request/reply: a deterministic, stable
+// lowercase UUID v4 per email (this integration test exercises the simulator's outbox
+// stream, not the real Identity round-trip — that is the conformance checkin-chain
+// scenario). The real bus resolver is wired in cmd/timing.
+func fakeResolveID(_ context.Context, email string) (string, error) {
+	h := fnv.New128a()
+	_, _ = h.Write([]byte(email))
+	var b [16]byte
+	copy(b[:], h.Sum(nil))
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+}
 
 // AC1/AC3/AC4: with the simulator on, a real broker receives one full session in
 // order — session.started, then drivers*laps lap.recorded, then session.ended —
@@ -62,6 +78,7 @@ func TestSimulatorStreamsValidSessionThroughOutbox(t *testing.T) {
 		Rng:          rand.New(rand.NewSource(1)),
 		Now:          time.Now,
 		Enqueue:      enqueue,
+		Resolve:      fakeResolveID, // register-first (Story 2.3): real ids replace fixtures
 		Log:          logging.New(testWriter{t}, "timing", itCorrelationID, "error"),
 	})
 
@@ -99,7 +116,7 @@ func TestSimulatorStreamsValidSessionThroughOutbox(t *testing.T) {
 				// sessions), keep the relay running so it can finish marking
 				// rows sent, then assert.
 				stopSim()
-				assertSessionShape(t, types, wantLaps)
+				assertSessionShape(t, types, drivers, wantLaps)
 				if gotLaps != wantLaps {
 					t.Fatalf("lap.recorded count = %d, want %d", gotLaps, wantLaps)
 				}
@@ -113,9 +130,11 @@ func TestSimulatorStreamsValidSessionThroughOutbox(t *testing.T) {
 	}
 }
 
-// assertSessionShape checks the first event is session.started, the last is
-// session.ended, and exactly wantLaps lap.recorded sit between them.
-func assertSessionShape(t *testing.T, types []string, wantLaps int) {
+// assertSessionShape checks the register-first session shape (Story 2.3): the first
+// event is session.started, the last is session.ended, exactly wantCheckIns
+// driver.checked_in sit at the gate (all BEFORE any lap), and exactly wantLaps
+// lap.recorded follow.
+func assertSessionShape(t *testing.T, types []string, wantCheckIns, wantLaps int) {
 	t.Helper()
 	if len(types) < 2 {
 		t.Fatalf("too few events: %v", types)
@@ -126,13 +145,24 @@ func assertSessionShape(t *testing.T, types []string, wantLaps int) {
 	if types[len(types)-1] != messaging.SessionEndedRoutingKey {
 		t.Errorf("last event = %q, want session.ended", types[len(types)-1])
 	}
-	laps := 0
+	checkIns, laps := 0, 0
+	sawLap := false
 	for _, ty := range types[1 : len(types)-1] {
-		if ty != messaging.LapRecordedRoutingKey {
-			t.Errorf("unexpected mid-stream event %q (want only lap.recorded)", ty)
-		} else {
+		switch ty {
+		case messaging.DriverCheckedInRoutingKey:
+			checkIns++
+			if sawLap {
+				t.Errorf("driver.checked_in appeared AFTER a lap.recorded — check-ins must precede laps")
+			}
+		case messaging.LapRecordedRoutingKey:
+			sawLap = true
 			laps++
+		default:
+			t.Errorf("unexpected mid-stream event %q (want driver.checked_in then lap.recorded)", ty)
 		}
+	}
+	if checkIns != wantCheckIns {
+		t.Errorf("mid-stream driver.checked_in = %d, want %d", checkIns, wantCheckIns)
 	}
 	if laps != wantLaps {
 		t.Errorf("mid-stream lap.recorded = %d, want %d", laps, wantLaps)

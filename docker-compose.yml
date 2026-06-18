@@ -48,6 +48,10 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy          # don't start until the broker is ready (no sleeps, AR17)
+      identity:
+        condition: service_started          # register-first (Story 2.3): the simulator resolves ids via
+                                            # Identity. The resolver retries the lookup until Identity binds,
+                                            # so this only avoids a cold-start retry delay (not correctness).
     environment:
       # Inside the compose network services reach the broker by name, never the host port.
       RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
@@ -76,6 +80,15 @@ services:
       SIM_TICK_MS: ${SIM_TICK_MS:-250}
       SIM_SESSION_GAP_MS: ${SIM_SESSION_GAP_MS:-5000}
       SIM_SEED: ${SIM_SEED:-}
+      # Register-first gate check-in (Story 2.3): how many sim drivers check in via a
+      # transponder (rest via QR), and Timing's FIRST inbound consumer (identity.resolved)
+      # DLQ policy (Story 1.9, Q&A Round 27). Defaults keep the bare `compose config` valid.
+      SIM_TRANSPONDERS: ${SIM_TRANSPONDERS:-2}
+      CONSUME_PREFETCH: ${CONSUME_PREFETCH:-16}
+      DLQ_MAX_ATTEMPTS: ${DLQ_MAX_ATTEMPTS:-5}
+      DLQ_RETRY_BASE_MS: ${DLQ_RETRY_BASE_MS:-1000}
+      DLQ_RETRY_MULTIPLIER: ${DLQ_RETRY_MULTIPLIER:-2}
+      DLQ_RETRY_MAX_MS: ${DLQ_RETRY_MAX_MS:-60000}
     volumes:
       - timing-data:/data                   # private DB survives `down` (without -v) and restarts
     healthcheck:
