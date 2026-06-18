@@ -46,6 +46,20 @@ type Config struct {
 	// REQUIRED when the simulator is on (the only crossing source in Epic 1) and
 	// inert (0) when off — so the heartbeat-only path gains no new required var.
 	MinLapTimeMs int
+
+	// SimTransponders is how many of the N simulator drivers check in via a transponder
+	// (the rest via QR). Optional, default 0 (all QR); must be <= SimDrivers. Exercises
+	// the transponder->masterId map resolution path (Story 2.3, AC2).
+	SimTransponders int
+
+	// Consumer + DLQ knobs — Timing's FIRST inbound consumer (identity.resolved) arrives
+	// in Story 2.3. ConsumePrefetch bounds in-flight unacked deliveries (QoS, > 0). The
+	// DLQ policy (Story 1.9; values pinned Q&A Round 27) governs retry-then-park.
+	ConsumePrefetch    int
+	DLQMaxAttempts     int
+	DLQRetryBaseMs     int
+	DLQRetryMultiplier int
+	DLQRetryMaxMs      int
 }
 
 // requiredVars must be present and non-empty.
@@ -84,6 +98,42 @@ func Load(getenv func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("OUTBOX_POLL_INTERVAL_MS must be a positive integer, got %d", pollInterval)
 	}
 
+	prefetch, err := intEnv(getenv, "CONSUME_PREFETCH", 16)
+	if err != nil {
+		return nil, err
+	}
+	if prefetch <= 0 {
+		return nil, fmt.Errorf("CONSUME_PREFETCH must be a positive integer, got %d", prefetch)
+	}
+	dlqMaxAttempts, err := intEnv(getenv, "DLQ_MAX_ATTEMPTS", 5)
+	if err != nil {
+		return nil, err
+	}
+	if dlqMaxAttempts < 1 {
+		return nil, fmt.Errorf("DLQ_MAX_ATTEMPTS must be >= 1, got %d", dlqMaxAttempts)
+	}
+	dlqBaseMs, err := intEnv(getenv, "DLQ_RETRY_BASE_MS", 1000)
+	if err != nil {
+		return nil, err
+	}
+	if dlqBaseMs <= 0 {
+		return nil, fmt.Errorf("DLQ_RETRY_BASE_MS must be a positive integer, got %d", dlqBaseMs)
+	}
+	dlqMultiplier, err := intEnv(getenv, "DLQ_RETRY_MULTIPLIER", 2)
+	if err != nil {
+		return nil, err
+	}
+	if dlqMultiplier < 1 {
+		return nil, fmt.Errorf("DLQ_RETRY_MULTIPLIER must be >= 1, got %d", dlqMultiplier)
+	}
+	dlqMaxMs, err := intEnv(getenv, "DLQ_RETRY_MAX_MS", 60000)
+	if err != nil {
+		return nil, err
+	}
+	if dlqMaxMs < dlqBaseMs {
+		return nil, fmt.Errorf("DLQ_RETRY_MAX_MS (%d) must be >= DLQ_RETRY_BASE_MS (%d)", dlqMaxMs, dlqBaseMs)
+	}
+
 	cfg := &Config{
 		RabbitHost:         getenv("RABBITMQ_HOST"),
 		RabbitPort:         getenv("RABBITMQ_PORT"),
@@ -99,6 +149,11 @@ func Load(getenv func(string) string) (*Config, error) {
 		DBPath:             firstNonEmpty(getenv("DB_PATH"), "/data/timing.db"),
 		InstanceID:         getenv("INSTANCE_ID"),
 		ContractDir:        getenv("CONTRACT_DIR"),
+		ConsumePrefetch:    prefetch,
+		DLQMaxAttempts:     dlqMaxAttempts,
+		DLQRetryBaseMs:     dlqBaseMs,
+		DLQRetryMultiplier: dlqMultiplier,
+		DLQRetryMaxMs:      dlqMaxMs,
 	}
 
 	if err := loadSimulator(getenv, cfg); err != nil {
@@ -140,6 +195,18 @@ func loadSimulator(getenv func(string) string, cfg *Config) error {
 		return fmt.Errorf("MIN_LAP_TIME_MS (%d) must be below SIM_LAP_MEAN_MS (%d), else the simulator would reject most laps",
 			cfg.MinLapTimeMs, cfg.SimLapMeanMs)
 	}
+
+	// SIM_TRANSPONDERS: how many drivers check in via a transponder (rest QR). Optional,
+	// default 0; must be within [0, SIM_DRIVERS] (you cannot have more transponder
+	// drivers than drivers — a silent misconfiguration otherwise).
+	transponders, err := intEnv(getenv, "SIM_TRANSPONDERS", 0)
+	if err != nil {
+		return err
+	}
+	if transponders < 0 || transponders > cfg.SimDrivers {
+		return fmt.Errorf("SIM_TRANSPONDERS (%d) must be between 0 and SIM_DRIVERS (%d)", transponders, cfg.SimDrivers)
+	}
+	cfg.SimTransponders = transponders
 
 	// Optional, correctness-neutral pacing knobs (defaults allowed).
 	tick, err := intEnv(getenv, "SIM_TICK_MS", 250)

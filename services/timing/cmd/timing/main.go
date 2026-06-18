@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"math/rand"
 	"os"
@@ -17,9 +18,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/config"
-	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/heartbeat"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/dlq"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/logging"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/config"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/consumer"
+	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/heartbeat"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/messaging"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/persistence"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/relay"
@@ -107,11 +110,77 @@ func run() int {
 	enqueue := relay.NewEnqueuer(db, outbox, validator.ValidateEnvelopeBytes, outboxRelay)
 
 	// Simulator (Story 1.5): env-toggled, OFF by default. When on, it generates
-	// continuous sessions of laps for N fixture drivers through the outbox.
-	var sim *simulator.Simulator
+	// continuous sessions of gate check-ins + laps for N drivers through the outbox.
+	//
+	// Story 2.3 makes Timing dual-role for the register-first chain (Q&A Round 32): the
+	// simulator RESOLVES each driver's canonical masterId via Identity before check-in.
+	// That needs (a) a publisher to frontend.events for identity.lookup_requested (the
+	// Frontend stand-in) and (b) a consumer of identity.resolved off identity.events that
+	// signals the waiting Resolve. Both are wired only when the simulator is on (the only
+	// producer of register-first lookups in this story).
+	var (
+		sim          *simulator.Simulator
+		consumerBus  *messaging.Bus
+		lookupPub    *messaging.Publisher
+		resolveHnd   *consumer.Handler
+		consumerOpts messaging.ConsumerOptions
+	)
 	if cfg.SimulatorEnabled {
+		tpStore := persistence.NewTransponderStore(db)
+
+		lookupPub, err = messaging.Dial(cfg.AMQPURI(), messaging.FrontendEventsExchange)
+		if err != nil {
+			log.Error("failed to connect lookup publisher to broker", "error", err.Error())
+			return 1
+		}
+		consumerBus, err = messaging.DialConsumer(cfg.AMQPURI(), messaging.TimingExchange)
+		if err != nil {
+			log.Error("failed to connect identity.resolved consumer to broker", "error", err.Error())
+			_ = lookupPub.Close()
+			return 1
+		}
+
+		resolver := &consumer.Resolver{
+			DB:     db,
+			Source: "frontend", // the simulator impersonates the Frontend registration producer (Q30.1)
+			Log:    log,
+			Publish: func(ctx context.Context, env messaging.Envelope) error {
+				body, merr := json.Marshal(env)
+				if merr != nil {
+					return consumer.Permanent(merr) // a malformed envelope cannot be fixed by retrying
+				}
+				if verr := validator.ValidateEnvelopeBytes(body); verr != nil { // validate-on-publish
+					return consumer.Permanent(verr) // a contract-invalid lookup is permanent — fail fast
+				}
+				return lookupPub.Publish(ctx, env.Type, body) // a broker error is transient — Resolve retries
+			},
+		}
+
+		resolveHnd = &consumer.Handler{
+			Validate:    validator.ValidateEnvelopeBytes,
+			Deliverer:   resolver,
+			Log:         log,
+			ResolvedKey: messaging.IdentityResolvedRoutingKey,
+			Policy: dlq.Policy{
+				MaxAttempts: cfg.DLQMaxAttempts,
+				BaseMs:      cfg.DLQRetryBaseMs,
+				Multiplier:  cfg.DLQRetryMultiplier,
+				MaxMs:       cfg.DLQRetryMaxMs,
+			},
+			Retry: consumerBus.RetryToDLX,
+			Park:  consumerBus.ParkToDLX,
+		}
+		consumerOpts = messaging.ConsumerOptions{
+			SourceExchange: messaging.IdentityEventsExchange, // bind to Identity's exchange for the reply
+			QueueName:      messaging.IdentityResolvedQueue,
+			RoutingKeys:    []string{messaging.IdentityResolvedRoutingKey},
+			Prefetch:       cfg.ConsumePrefetch,
+			DLXExchange:    messaging.TimingDLXExchange,
+		}
+
 		sim = simulator.New(simulator.Config{
 			Drivers:      cfg.SimDrivers,
+			Transponders: cfg.SimTransponders,
 			LapMeanMs:    cfg.SimLapMeanMs,
 			LapStddevMs:  cfg.SimLapStddevMs,
 			SessionLaps:  cfg.SimSessionLaps,
@@ -122,10 +191,15 @@ func run() int {
 			Rng:          seedRNG(cfg),
 			Now:          time.Now,
 			Enqueue:      enqueue,
-			Log:          log,
+			Resolve:      resolver.Resolve,
+			SeedTransponder: func(ctx context.Context, transponderID, masterID string) error {
+				return tpStore.Upsert(ctx, transponderID, masterID, messaging.FormatWireTime(time.Now()))
+			},
+			Log: log,
 		})
-		log.Info("simulator enabled", "drivers", cfg.SimDrivers, "sessionLaps", cfg.SimSessionLaps,
-			"lapMeanMs", cfg.SimLapMeanMs, "lapStddevMs", cfg.SimLapStddevMs, "minLapTimeMs", cfg.MinLapTimeMs)
+		log.Info("simulator enabled (register-first)", "drivers", cfg.SimDrivers, "transponders", cfg.SimTransponders,
+			"sessionLaps", cfg.SimSessionLaps, "lapMeanMs", cfg.SimLapMeanMs, "lapStddevMs", cfg.SimLapStddevMs,
+			"minLapTimeMs", cfg.MinLapTimeMs)
 	}
 
 	// Run until SIGTERM/SIGINT.
@@ -146,6 +220,46 @@ func run() int {
 		log.Error("failed to start the broker connection supervisor", "error", err.Error())
 		_ = pub.Close()
 		return 1
+	}
+
+	// Register-first wiring (Story 2.3): the identity.resolved consumer + the
+	// frontend.events lookup publisher must be live BEFORE the simulator's Prepare
+	// resolves driver ids (Prepare publishes a lookup and blocks on the reply).
+	var consumerDone chan struct{}
+	if sim != nil {
+		if err := lookupPub.ConnectAndServe(ctx, log, func(connected bool) {
+			if connected {
+				log.Info("lookup publisher connection established", "exchange", messaging.FrontendEventsExchange)
+			} else {
+				log.Warn("lookup publisher connection lost; register-first lookups pause until reconnect")
+			}
+		}); err != nil {
+			log.Error("failed to start the lookup publisher supervisor", "error", err.Error())
+			_ = pub.Close()
+			_ = lookupPub.Close()
+			_ = consumerBus.Close()
+			return 1
+		}
+		deliveries, derr := consumerBus.ConnectAndConsume(ctx, consumerOpts, log, func(connected bool) {
+			if connected {
+				log.Info("broker connection established; consuming identity.resolved", "queue", messaging.IdentityResolvedQueue)
+			} else {
+				log.Warn("broker connection lost; identity.resolved will redeliver on reconnect")
+			}
+		})
+		if derr != nil {
+			log.Error("failed to start the identity.resolved consumer supervisor", "error", derr.Error())
+			_ = pub.Close()
+			_ = lookupPub.Close()
+			_ = consumerBus.Close()
+			return 1
+		}
+		log.Info("consuming identity.resolved", "queue", messaging.IdentityResolvedQueue,
+			"source", messaging.IdentityEventsExchange, "dlx", messaging.TimingDLXExchange,
+			"retryQueue", messaging.RetryQueueName(messaging.IdentityResolvedQueue),
+			"parkingQueue", messaging.ParkingQueueName(messaging.IdentityResolvedQueue), "prefetch", cfg.ConsumePrefetch)
+		consumerDone = make(chan struct{})
+		go func() { resolveHnd.Run(ctx, deliveries); close(consumerDone) }()
 	}
 
 	loopDone := make(chan struct{})
@@ -180,10 +294,24 @@ func run() int {
 	if simDone != nil {
 		waitFor(shutdownCtx, log, "simulator loop", simDone)
 	}
+	if consumerDone != nil {
+		waitFor(shutdownCtx, log, "identity.resolved consumer loop", consumerDone)
+	}
 	waitFor(shutdownCtx, log, "heartbeat loop", loopDone)
 	waitFor(shutdownCtx, log, "relay loop", relayDone)
 
 	flushOutbox(shutdownCtx, log, outboxRelay)
+
+	if consumerBus != nil {
+		if cerr := consumerBus.Close(); cerr != nil {
+			log.Error("error closing identity.resolved consumer connection", "error", cerr.Error())
+		}
+	}
+	if lookupPub != nil {
+		if cerr := lookupPub.Close(); cerr != nil {
+			log.Error("error closing lookup publisher connection", "error", cerr.Error())
+		}
+	}
 
 	if err := pub.Close(); err != nil {
 		log.Error("error closing broker connection", "error", err.Error())
