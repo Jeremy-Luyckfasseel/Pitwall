@@ -5,7 +5,22 @@
 // persistence Store; the routing key (topology) is passed in by the messaging layer.
 package domain
 
-import "github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/messaging"
+import (
+	"strings"
+
+	"github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/messaging"
+)
+
+// NormalizeEmail returns the canonical form of the email natural key (Q&A Round 31):
+// surrounding whitespace trimmed and the whole address lowercased. Identity is the
+// AUTHORITATIVE point of normalization — it applies this before it de-duplicates,
+// stores, and echoes the value, so case/whitespace variants of one mailbox
+// (Jeremy@X.com, " jeremy@x.com ") resolve to exactly one masterId (AC2/FR1/FR2/NFR15).
+// It does not trust producers to send a canonical form. A blank or whitespace-only
+// input collapses to "" (the handler parks that as a blank natural key).
+func NormalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
 
 // LookupData is the identity.lookup_requested data payload
 // (contract/schemas/frontend/identity.lookup_requested.v1.schema.json).

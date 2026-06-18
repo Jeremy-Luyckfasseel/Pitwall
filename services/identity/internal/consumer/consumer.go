@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/identity/internal/domain"
@@ -110,9 +109,14 @@ func (h *Handler) processLookup(ctx context.Context, d messaging.Delivery, env m
 		h.park(ctx, d, "undecodable-data", env.ID, env.CorrelationID)
 		return
 	}
-	// Defensive guard (validate-on-consume already enforces email minLength via
-	// /contract, but never resolve on a blank natural key — it would key the store on "").
-	if strings.TrimSpace(data.Email) == "" {
+	// Canonicalize the email natural key (Q&A Round 31): Identity is the authoritative
+	// point of normalization (trim + lowercase), so case/whitespace variants of one
+	// mailbox de-dup to exactly one masterId (AC2). The normalized value is what gets
+	// de-duped, stored, and echoed in identity.resolved.
+	data.Email = domain.NormalizeEmail(data.Email)
+	// Defensive guard (validate-on-consume already enforces email shape via /contract,
+	// but never resolve on a blank natural key — it would key the store on "").
+	if data.Email == "" {
 		h.Log.Error("rejecting identity.lookup_requested with blank email", "eventId", env.ID, "correlationId", env.CorrelationID)
 		h.park(ctx, d, "blank-email", env.ID, env.CorrelationID)
 		return

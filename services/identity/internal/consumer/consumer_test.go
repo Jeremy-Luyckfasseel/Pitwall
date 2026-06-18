@@ -114,6 +114,41 @@ func TestProcess_MintAcksAndNotifies(t *testing.T) {
 	}
 }
 
+// The email natural key is canonicalized (trim + lowercase, Q&A Round 31) BEFORE it
+// reaches the resolver, so case/whitespace variants de-dup to one masterId (AC2).
+func TestProcess_NormalizesEmailBeforeResolving(t *testing.T) {
+	res := &fakeResolver{result: consumer.ResolveResult{MasterID: "id-A", Minted: true}}
+	h, parks := newHandler(res, func() {})
+
+	d := &fakeDelivery{body: lookupBody(t, "018f9e2a-7c3d-7b21-9c4e-2a1b3c4d5e6f", "  Jeremy@Example.COM  ")}
+	h.Process(context.Background(), d)
+
+	if !res.called {
+		t.Fatal("resolver was not called for a valid lookup")
+	}
+	if res.gotReq.Email != "jeremy@example.com" {
+		t.Fatalf("resolver got email %q; want the normalized form jeremy@example.com", res.gotReq.Email)
+	}
+	if len(*parks) != 0 {
+		t.Fatalf("unexpected parks: %v", *parks)
+	}
+}
+
+// A whitespace-only email normalizes to "" and is parked as a blank natural key
+// (never resolved on an empty key — AC3 "never silently dropped, never resolved").
+func TestProcess_WhitespaceOnlyEmailParksAsBlank(t *testing.T) {
+	res := &fakeResolver{}
+	h, parks := newHandler(res, func() {})
+	d := &fakeDelivery{body: lookupBody(t, "018f9e2a-7c3d-7b21-9c4e-2a1b3c4d5e6f", "   ")}
+	h.Process(context.Background(), d)
+	if res.called {
+		t.Fatal("a whitespace-only email must not resolve (blank natural key)")
+	}
+	if len(*parks) != 1 || (*parks)[0] != "blank-email" {
+		t.Fatalf("whitespace-only email should park as blank-email; parks=%v", *parks)
+	}
+}
+
 func TestProcess_DuplicateAcksWithoutNotify(t *testing.T) {
 	notified := false
 	res := &fakeResolver{result: consumer.ResolveResult{MasterID: "id-A", Duplicate: true}}

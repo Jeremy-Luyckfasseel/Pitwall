@@ -15,6 +15,25 @@ import (
 // canonical UUID v4 — version nibble 4, variant nibble 8/9/a/b.
 var v4Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
+// NormalizeEmail is the canonical-form rule for the email natural key (Q&A Round 31):
+// Identity trims surrounding whitespace and lowercases the whole address so that
+// case/whitespace variants of one mailbox resolve to exactly one masterId (AC2).
+func TestNormalizeEmail(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"jeremy@example.com", "jeremy@example.com"}, // already canonical
+		{"Jeremy@Example.com", "jeremy@example.com"}, // case-folded
+		{"  jeremy@example.com  ", "jeremy@example.com"}, // surrounding spaces trimmed
+		{"\tFOO@X.COM\n", "foo@x.com"},                  // tabs/newlines + uppercase
+		{"", ""},                                         // empty stays empty
+		{"   ", ""},                                       // whitespace-only collapses to blank
+	}
+	for _, c := range cases {
+		if got := domain.NormalizeEmail(c.in); got != c.want {
+			t.Fatalf("NormalizeEmail(%q) = %q; want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestResolve_ReusesExistingId(t *testing.T) {
 	gen := func() string { t.Fatal("gen must not be called when an id already exists"); return "" }
 	got, minted := domain.Resolve("1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21", true, gen)
