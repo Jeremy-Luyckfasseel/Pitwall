@@ -13,6 +13,7 @@ import (
 // tests/conformance/<lang>/ runner maps the SAME names to its own implementations.
 var scenarioRunners = map[string]func(t *testing.T, sc Scenario){
 	"smoke":             runSmoke,
+	"checkin-chain":     runCheckinChain,
 	"peer-down":         runPeerDown,
 	"inbox-dup":         runInboxDup,
 	"publish-redeliver": runPublishRedeliver,

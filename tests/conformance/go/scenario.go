@@ -56,6 +56,10 @@ type SimulatorSpec struct {
 	// scenario that needs the session to SPAN a mid-session event (e.g. peer-down
 	// must kill the bus while laps are still being produced) sets it higher.
 	TickMs int `yaml:"tickMs"`
+	// Transponders is how many of Drivers check in via a transponder (SIM_TRANSPONDERS,
+	// the rest via QR). Defaults 0 (all QR). Exercises the gate transponder-resolution
+	// path (Story 2.3, AC2).
+	Transponders int `yaml:"transponders"`
 }
 
 // FixtureSpec is a deterministic, language-neutral lap sequence the harness
@@ -87,6 +91,12 @@ type ExpectSpec struct {
 	BoardDrivers    int  `yaml:"boardDrivers"`
 	RankedAscending bool `yaml:"rankedAscending"`
 	SessionFinished bool `yaml:"sessionFinished"`
+	// CheckedIn is the expected number of driver.checked_in events observed on the bus
+	// (one per driver at the gate) — the check-in chain scenario (Story 2.3, AC1/AC3).
+	CheckedIn int `yaml:"checkedIn"`
+	// TransponderCheckIns is the expected number of check-ins with checkInMethod
+	// "transponder" (the rest "qr") — proves the transponder map resolution (AC2).
+	TransponderCheckIns int `yaml:"transponderCheckIns"`
 }
 
 // LoadScenario parses one scenarios/*.yaml file into a Scenario.
