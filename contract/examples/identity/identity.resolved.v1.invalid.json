@@ -1,5 +1,5 @@
 {
-  "_invalidReason": "masterId 'not-a-uuid' violates the UUID pattern and requestId is missing; identity.resolved requires requestId, email, masterId — the data-pass must reject it.",
+  "_invalidReason": "masterId '018f9e2a-7c3d-7b21-9c4e-2a1b3c4d5e6f' is a well-formed UUID but version 7, NOT v4 (version nibble must be 4). 'format: uuid' alone (annotation-only) would accept it, but the asserted v4 pattern rejects it — proving the pattern enforces v4-ness, not mere UUID shape (AC1). requestId, email and masterId are all present and the other fields valid, so the masterId v4 pattern is the SOLE catch. The data-pass must reject it.",
   "id": "c3d4e5f6-1234-4abc-9def-0123456789ab",
   "type": "identity.resolved",
   "source": "identity",
@@ -9,7 +9,8 @@
   "correlationId": "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
   "causationId": "aa11bb22-cc33-4dd4-8ee5-ff6677889900",
   "data": {
+    "requestId": "aa11bb22-cc33-4dd4-8ee5-ff6677889900",
     "email": "jeremy@example.com",
-    "masterId": "not-a-uuid"
+    "masterId": "018f9e2a-7c3d-7b21-9c4e-2a1b3c4d5e6f"
   }
 }

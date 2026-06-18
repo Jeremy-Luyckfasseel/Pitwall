@@ -17,7 +17,8 @@
       "type": "string",
       "format": "email",
       "minLength": 3,
-      "description": "The natural key Identity de-duplicates on. Known email -> existing masterId; unknown -> mint a new one. The only PII Identity ever stores."
+      "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+      "description": "The natural key Identity de-duplicates on. Known email -> existing masterId; unknown -> mint a new one. The only PII Identity ever stores. A pragmatic shape pattern is enforced (local@domain.tld, no embedded whitespace) because JSON-Schema 'format' is annotation-only; it is case-tolerant since Identity normalizes (trim + lowercase) on consume — Q&A Round 31."
     }
   }
 }
