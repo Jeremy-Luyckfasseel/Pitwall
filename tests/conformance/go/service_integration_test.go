@@ -224,11 +224,60 @@ func startLeaderboard(t *testing.T, amqpURL string) *svcProc {
 	return p
 }
 
+// startIdentity builds + runs the REAL Identity binary (the canonical-id issuer). It
+// consumes identity.lookup_requested off frontend.events and replies identity.resolved
+// on identity.events. Identity has no HTTP; readiness is its "consuming" stdout marker
+// (so the simulator's register-first lookups are never published before Identity binds
+// its queue — Story 2.3). The DB path is stable across restart.
+func startIdentity(t *testing.T, amqpURL string) *svcProc {
+	t.Helper()
+	exe := buildBinary(t, "identity")
+	dbPath := filepath.Join(t.TempDir(), "identity.db")
+	live := filepath.Join(t.TempDir(), "identity.live")
+	env := map[string]string{
+		"DB_PATH":         dbPath,
+		"CONTRACT_DIR":    filepath.Join(repoRoot(t), "contract"),
+		"LIVENESS_FILE":   live,
+		"SERVICE_NAME":    "identity",
+		"SOURCE_EXCHANGE": "frontend.events",
+		"LOG_LEVEL":       "info",
+	}
+	for k, v := range rabbitEnv(amqpURL) {
+		env[k] = v
+	}
+	p := &svcProc{
+		name: "identity",
+		exe:  exe,
+		env:  mergeEnv(env),
+		out:  &syncBuf{},
+	}
+	p.launch(t)
+	t.Cleanup(func() { p.kill(t) })
+	// Wait until Identity is actually consuming (queue bound to frontend.events) before
+	// the caller starts producing lookups — observable readiness, never a sleep.
+	waitLog(t, p, "consuming", 30*time.Second)
+	return p
+}
+
+// waitLog blocks until the process's captured stdout contains substr (an observable
+// readiness marker for a service with no HTTP endpoint, e.g. Identity's "consuming").
+func waitLog(t *testing.T, p *svcProc, substr string, timeout time.Duration) {
+	t.Helper()
+	waitUntil(t, p.name+" log contains "+strconv.Quote(substr), timeout, func() bool {
+		return strings.Contains(p.out.String(), substr)
+	})
+}
+
 // startTimingSimulator builds + runs the REAL Timing binary in simulator mode
-// (seed-deterministic) as the lap producer. One session only within the test
-// window (a long inter-session gap defers any second session).
+// (seed-deterministic) as the gate-check-in + lap producer. Register-first (Story 2.3):
+// the simulator resolves each driver's masterId via Identity before the gate, so this
+// also brings up the REAL Identity binary (ready before Timing starts). One session only
+// within the test window (a long inter-session gap defers any second session).
 func startTimingSimulator(t *testing.T, amqpURL string, sim SimulatorSpec) *svcProc {
 	t.Helper()
+	// Identity must be consuming before Timing publishes its first register-first lookup.
+	startIdentity(t, amqpURL)
+
 	exe := buildBinary(t, "timing")
 	dbPath := filepath.Join(t.TempDir(), "timing.db")
 	live := filepath.Join(t.TempDir(), "timing.live")
@@ -239,6 +288,7 @@ func startTimingSimulator(t *testing.T, amqpURL string, sim SimulatorSpec) *svcP
 	env := map[string]string{
 		"SIMULATOR_ENABLED":  "true",
 		"SIM_DRIVERS":        strconv.Itoa(sim.Drivers),
+		"SIM_TRANSPONDERS":   strconv.Itoa(sim.Transponders),
 		"SIM_SESSION_LAPS":   strconv.Itoa(sim.SessionLaps),
 		"SIM_SEED":           strconv.FormatInt(sim.Seed, 10),
 		"SIM_LAP_MEAN_MS":    "41000",

@@ -3,6 +3,8 @@ package simulator
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"hash/fnv"
 	"math/rand"
 	"reflect"
 	"regexp"
@@ -16,16 +18,33 @@ var v4Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab]
 
 func marshal(e messaging.Envelope) ([]byte, error) { return json.Marshal(e) }
 
+// fakeResolve is a deterministic stand-in for the Identity request/reply: it maps an
+// email to a stable lowercase UUID v4 (so the same email always resolves to the same
+// id, exactly like the real idempotent Identity). The real bus resolver is wired in
+// cmd/timing (Task 6) + exercised by the integration/conformance layers.
+func fakeResolve(_ context.Context, email string) (string, error) {
+	h := fnv.New128a()
+	_, _ = h.Write([]byte(email))
+	var b [16]byte
+	copy(b[:], h.Sum(nil))
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10x
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+}
+
 func testConfig(rng *rand.Rand) Config {
 	return Config{
-		Drivers:      4,
-		LapMeanMs:    45000,
-		LapStddevMs:  2000,
-		SessionLaps:  5,
-		MinLapTimeMs: 10000, // filter active, but well below the mean -> rejects nothing
-		Source:       "timing",
-		Rng:          rng,
-		Now:          func() time.Time { return time.Date(2026, 6, 5, 14, 0, 0, 0, time.UTC) },
+		Drivers:         4,
+		Transponders:    0, // default: all QR (the smoke's shape); >0 exercises the map path
+		LapMeanMs:       45000,
+		LapStddevMs:     2000,
+		SessionLaps:     5,
+		MinLapTimeMs:    10000, // filter active, but well below the mean -> rejects nothing
+		Source:          "timing",
+		Rng:             rng,
+		Now:             func() time.Time { return time.Date(2026, 6, 5, 14, 0, 0, 0, time.UTC) },
+		Resolve:         fakeResolve,
+		SeedTransponder: func(context.Context, string, string) error { return nil },
 	}
 }
 
@@ -42,17 +61,24 @@ func validatorForTest(t *testing.T) *messaging.Validator {
 	return v
 }
 
+func prepared(t *testing.T, cfg Config) *Simulator {
+	t.Helper()
+	s := New(cfg)
+	if err := s.Prepare(context.Background()); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	return s
+}
+
 // GenerateSession produces a coherent, ordered, contract-valid session:
-// session.started first, N*SessionLaps lap.recorded in the middle, session.ended
-// last; per-driver lapNumbers run 1..SessionLaps.
+// session.started first, one driver.checked_in per driver at the gate, then
+// N*SessionLaps lap.recorded, session.ended last; per-driver lapNumbers run
+// 1..SessionLaps. Every event uses the REAL (resolved) masterId, never a fixture.
 func TestGenerateSession_CoherentValidatedStream(t *testing.T) {
 	v := validatorForTest(t)
-	s := New(testConfig(rand.New(rand.NewSource(1))))
+	s := prepared(t, testConfig(rand.New(rand.NewSource(1))))
 	evs := s.GenerateSession(s.now())
 
-	if len(evs) < 2 {
-		t.Fatalf("expected at least started+ended, got %d", len(evs))
-	}
 	if evs[0].Type != messaging.SessionStartedRoutingKey {
 		t.Errorf("first event = %q, want session.started", evs[0].Type)
 	}
@@ -60,11 +86,11 @@ func TestGenerateSession_CoherentValidatedStream(t *testing.T) {
 		t.Errorf("last event = %q, want session.ended", evs[len(evs)-1].Type)
 	}
 
-	lapCount := 0
+	lapCount, checkInCount := 0, 0
+	sawFirstLap := false
 	perDriverMax := map[string]int{}
 	prevAt := time.Time{}
 	for _, e := range evs {
-		// Every event validates against /contract (producer-half two-sided validation).
 		b, err := marshal(e)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
@@ -72,7 +98,21 @@ func TestGenerateSession_CoherentValidatedStream(t *testing.T) {
 		if err := v.ValidateEnvelopeBytes(b); err != nil {
 			t.Fatalf("event %q failed /contract validation: %v", e.Type, err)
 		}
-		if e.Type == messaging.LapRecordedRoutingKey {
+		switch e.Type {
+		case messaging.DriverCheckedInRoutingKey:
+			checkInCount++
+			if sawFirstLap {
+				t.Errorf("driver.checked_in emitted AFTER a lap.recorded — check-in must precede laps")
+			}
+			d := e.Data.(messaging.CheckedInData)
+			if !v4Pattern.MatchString(d.MasterID) {
+				t.Errorf("checked_in masterId %q is not a resolved v4", d.MasterID)
+			}
+			if d.CheckInMethod != messaging.CheckInMethodQR && d.CheckInMethod != messaging.CheckInMethodTransponder {
+				t.Errorf("unexpected checkInMethod %q", d.CheckInMethod)
+			}
+		case messaging.LapRecordedRoutingKey:
+			sawFirstLap = true
 			lapCount++
 			d := e.Data.(messaging.LapRecordedData)
 			if d.LapTimeMs < 1 {
@@ -82,7 +122,6 @@ func TestGenerateSession_CoherentValidatedStream(t *testing.T) {
 				perDriverMax[d.MasterID] = d.LapNumber
 			}
 		}
-		// occurredAt is monotonic non-decreasing across the emitted stream.
 		got, _ := time.Parse("2006-01-02T15:04:05.000Z", e.OccurredAt)
 		if got.Before(prevAt) {
 			t.Errorf("stream not time-ordered: %s before %s", e.OccurredAt, prevAt.Format(time.RFC3339Nano))
@@ -90,6 +129,9 @@ func TestGenerateSession_CoherentValidatedStream(t *testing.T) {
 		prevAt = got
 	}
 
+	if checkInCount != testConfig(nil).Drivers {
+		t.Errorf("driver.checked_in count = %d, want %d (one per driver)", checkInCount, testConfig(nil).Drivers)
+	}
 	wantLaps := testConfig(nil).Drivers * testConfig(nil).SessionLaps
 	if lapCount != wantLaps {
 		t.Errorf("lap.recorded count = %d, want %d (drivers*laps)", lapCount, wantLaps)
@@ -101,27 +143,77 @@ func TestGenerateSession_CoherentValidatedStream(t *testing.T) {
 	}
 }
 
-// AC4: with the min-lap filter active on clean (above-threshold) input the
-// simulator's output is identical to the unfiltered case — the filter rejects
-// nothing, so the same seed + base time yields the same stream regardless of
-// MinLapTimeMs.
+// A transponder driver checks in with checkInMethod:"transponder" + its hardware id,
+// and its mapping is seeded (so the gate resolves it) — Prepare calls SeedTransponder
+// with the resolved masterId. QR drivers check in with checkInMethod:"qr", null hw id.
+func TestPrepareAndGenerate_TransponderDriverCheckedInAndSeeded(t *testing.T) {
+	cfg := testConfig(rand.New(rand.NewSource(2)))
+	cfg.Drivers = 3
+	cfg.Transponders = 1 // the first driver uses a transponder; the other two QR
+
+	type seed struct{ tp, master string }
+	var seeds []seed
+	cfg.SeedTransponder = func(_ context.Context, tp, master string) error {
+		seeds = append(seeds, seed{tp, master})
+		return nil
+	}
+
+	s := prepared(t, cfg)
+	evs := s.GenerateSession(s.now())
+
+	if len(seeds) != 1 {
+		t.Fatalf("expected exactly 1 transponder mapping seeded, got %d", len(seeds))
+	}
+	if !v4Pattern.MatchString(seeds[0].master) {
+		t.Errorf("seeded masterId %q is not a resolved v4", seeds[0].master)
+	}
+
+	var qr, tp int
+	for _, e := range evs {
+		if e.Type != messaging.DriverCheckedInRoutingKey {
+			continue
+		}
+		d := e.Data.(messaging.CheckedInData)
+		switch d.CheckInMethod {
+		case messaging.CheckInMethodTransponder:
+			tp++
+			if d.TransponderID == nil || *d.TransponderID == "" {
+				t.Errorf("transponder check-in must carry a hardware id, got %v", d.TransponderID)
+			}
+			if d.TransponderID != nil && *d.TransponderID != seeds[0].tp {
+				t.Errorf("check-in hw id %q != seeded %q", *d.TransponderID, seeds[0].tp)
+			}
+			if d.MasterID != seeds[0].master {
+				t.Errorf("transponder check-in masterId %q != seeded %q", d.MasterID, seeds[0].master)
+			}
+		case messaging.CheckInMethodQR:
+			qr++
+			if d.TransponderID != nil {
+				t.Errorf("QR check-in must have null transponderId, got %v", *d.TransponderID)
+			}
+		}
+	}
+	if tp != 1 || qr != 2 {
+		t.Errorf("check-in method split = %d transponder / %d qr, want 1/2", tp, qr)
+	}
+}
+
+// AC4: with the min-lap filter active on clean (above-threshold) input the simulator's
+// output is identical to the unfiltered case — same seed + base -> same stream.
 func TestGenerateSession_FilterActiveLeavesCleanStreamUnchanged(t *testing.T) {
 	base := time.Date(2026, 6, 5, 14, 0, 0, 0, time.UTC)
 
 	off := testConfig(rand.New(rand.NewSource(11)))
-	off.MinLapTimeMs = 0 // filter off
-	a := New(off).GenerateSession(base)
+	off.MinLapTimeMs = 0
+	a := prepared(t, off).GenerateSession(base)
 
 	on := testConfig(rand.New(rand.NewSource(11)))
-	on.MinLapTimeMs = 10000 // filter on, below the 45 s mean
-	b := New(on).GenerateSession(base)
+	on.MinLapTimeMs = 10000
+	b := prepared(t, on).GenerateSession(base)
 
 	if len(a) != len(b) {
 		t.Fatalf("filter changed the stream length: off=%d on=%d", len(a), len(b))
 	}
-	// Compare the deterministic, filter-relevant fields (type, occurredAt, data
-	// payload). Envelope id/correlationId come from uuid.NewV7() per call and are
-	// expectedly non-deterministic — they are not what the filter affects.
 	for i := range a {
 		if a[i].Type != b[i].Type || a[i].OccurredAt != b[i].OccurredAt {
 			t.Errorf("event %d type/time differs with the filter on: %q@%s vs %q@%s",
@@ -136,8 +228,8 @@ func TestGenerateSession_FilterActiveLeavesCleanStreamUnchanged(t *testing.T) {
 // Same seed + same base time -> identical data (reproducible demos/tests).
 func TestGenerateSession_DeterministicUnderSeed(t *testing.T) {
 	base := time.Date(2026, 6, 5, 14, 0, 0, 0, time.UTC)
-	a := New(testConfig(rand.New(rand.NewSource(7)))).GenerateSession(base)
-	b := New(testConfig(rand.New(rand.NewSource(7)))).GenerateSession(base)
+	a := prepared(t, testConfig(rand.New(rand.NewSource(7)))).GenerateSession(base)
+	b := prepared(t, testConfig(rand.New(rand.NewSource(7)))).GenerateSession(base)
 	if len(a) != len(b) {
 		t.Fatalf("different lengths %d vs %d under same seed", len(a), len(b))
 	}
@@ -145,11 +237,14 @@ func TestGenerateSession_DeterministicUnderSeed(t *testing.T) {
 		if a[i].Type != b[i].Type || a[i].OccurredAt != b[i].OccurredAt {
 			t.Errorf("event %d differs under same seed: %q@%s vs %q@%s", i, a[i].Type, a[i].OccurredAt, b[i].Type, b[i].OccurredAt)
 		}
+		if !reflect.DeepEqual(a[i].Data, b[i].Data) {
+			t.Errorf("event %d data differs under same seed", i)
+		}
 	}
 }
 
-// Run emits a full session through the enqueuer in order, then stops cleanly on
-// ctx cancel — no sleeps (tick/gap zero; the fake cancels after one session).
+// Run prepares (resolves ids) then emits a full session through the enqueuer in order,
+// then stops cleanly on ctx cancel — no sleeps (tick/gap zero).
 func TestRun_EmitsSessionAndStopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var got []messaging.Envelope
@@ -157,7 +252,7 @@ func TestRun_EmitsSessionAndStopsOnCancel(t *testing.T) {
 	cfg.Enqueue = func(_ context.Context, e messaging.Envelope) error {
 		got = append(got, e)
 		if e.Type == messaging.SessionEndedRoutingKey {
-			cancel() // one full session captured -> stop
+			cancel()
 		}
 		return nil
 	}
@@ -172,16 +267,22 @@ func TestRun_EmitsSessionAndStopsOnCancel(t *testing.T) {
 	}
 }
 
-// Fixture masterIds are valid lowercase UUID v4 (NOT an identity path).
-func TestNew_MintsValidV4FixtureDrivers(t *testing.T) {
-	s := New(testConfig(rand.New(rand.NewSource(5))))
+// Register-first: each driver carries a deterministic email and, after Prepare,
+// a REAL resolved masterId (valid v4) — fixtures are gone (Q&A Round 32 / Q32.1).
+func TestPrepare_ResolvesRealMasterIDsPerDriver(t *testing.T) {
+	s := prepared(t, testConfig(rand.New(rand.NewSource(5))))
 	ids := s.DriverIDs()
 	if len(ids) != 4 {
-		t.Fatalf("expected 4 fixture drivers, got %d", len(ids))
+		t.Fatalf("expected 4 drivers, got %d", len(ids))
 	}
+	seen := map[string]bool{}
 	for _, id := range ids {
 		if !v4Pattern.MatchString(id) {
-			t.Errorf("driver id %q is not a lowercase UUID v4", id)
+			t.Errorf("driver id %q is not a resolved lowercase UUID v4", id)
 		}
+		seen[id] = true
+	}
+	if len(seen) != 4 {
+		t.Errorf("expected 4 distinct resolved masterIds, got %d", len(seen))
 	}
 }

@@ -41,9 +41,16 @@ const TimingExchange = "timing.events"
 // <entity>.<action> form). Their /contract data schemas live under
 // contract/schemas/timing/ (Story 1.2).
 const (
-	LapRecordedRoutingKey    = "lap.recorded"
-	SessionStartedRoutingKey = "session.started"
-	SessionEndedRoutingKey   = "session.ended"
+	LapRecordedRoutingKey     = "lap.recorded"
+	SessionStartedRoutingKey  = "session.started"
+	SessionEndedRoutingKey    = "session.ended"
+	DriverCheckedInRoutingKey = "driver.checked_in"
+)
+
+// Check-in methods for driver.checked_in.checkInMethod (pinned by the /contract enum).
+const (
+	CheckInMethodQR          = "qr"
+	CheckInMethodTransponder = "transponder"
 )
 
 // LapRecordedData is the timing/lap.recorded.v1 payload. TransponderID is a pointer
@@ -79,6 +86,47 @@ type SessionEndedData struct {
 	SessionID string              `json:"sessionId"`
 	EndedAt   string              `json:"endedAt"`
 	Summary   []SessionSummaryRow `json:"summary"`
+}
+
+// LookupRequestedData is the frontend/identity.lookup_requested.v1 payload (the
+// register-first lookup the simulator sends, impersonating the Frontend registration
+// producer). Identity replies identity.resolved correlated by requestId.
+type LookupRequestedData struct {
+	RequestID string `json:"requestId"`
+	Email     string `json:"email"`
+}
+
+// NewLookupRequestedEnvelope builds an identity.lookup_requested envelope. source is
+// "frontend" (the Frontend stand-in — Q&A Round 30/32), correlationId starts the flow,
+// causationId is null (flow-originating).
+func NewLookupRequestedEnvelope(source, correlationID, requestID, email string, at time.Time) Envelope {
+	return libmsg.NewDomainEnvelope(LookupRequestedRoutingKey, source, correlationID, FormatWireTime(at), LookupRequestedData{
+		RequestID: requestID,
+		Email:     email,
+	})
+}
+
+// CheckedInData is the timing/driver.checked_in.v1 payload. TransponderID is a pointer
+// so a QR driver (no transponder) serializes as null — the field is always present (no
+// omitempty on a meaningful wire field, AR9; same rule as LapRecordedData).
+type CheckedInData struct {
+	MasterID      string  `json:"masterId"`
+	At            string  `json:"at"`
+	CheckInMethod string  `json:"checkInMethod"`
+	TransponderID *string `json:"transponderId"`
+}
+
+// NewCheckedInEnvelope builds a fully-populated driver.checked_in envelope. occurredAt
+// and data.at are both stamped from at (the gate-scan time). Simulator/gate events are
+// flow-originating, so causationId is null and correlationId is the session's id.
+func NewCheckedInEnvelope(source, correlationID, masterID, checkInMethod string, transponderID *string, at time.Time) Envelope {
+	ts := FormatWireTime(at)
+	return libmsg.NewDomainEnvelope(DriverCheckedInRoutingKey, source, correlationID, ts, CheckedInData{
+		MasterID:      masterID,
+		At:            ts,
+		CheckInMethod: checkInMethod,
+		TransponderID: transponderID,
+	})
 }
 
 // NewLapRecordedEnvelope builds a fully-populated lap.recorded envelope. occurredAt

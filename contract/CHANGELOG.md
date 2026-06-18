@@ -11,6 +11,13 @@ side by side). See [`README.md`](README.md) for the normative wire rules.
 ## [Unreleased]
 
 ### Added
+- **`timing/driver.checked_in.v1`** data-payload schema + valid example + known-bad fixture — the
+  entry-gate check-in fact (`masterId`, `at`, `checkInMethod` ∈ {`qr`,`transponder`}, nullable
+  `transponderId`). Published to `timing.events` (routing key `driver.checked_in`). QR carries the
+  `masterId` directly (no lookup at the gate); a transponder hardware id is resolved via Timing's local
+  map. `masterId`/`at` reuse the strict `lap.recorded` patterns; `transponderId` is `["string","null"]`
+  and always present (null for QR drivers, AR9). The known-bad fixture breaks the `checkInMethod` enum
+  (`"badge"`). *(Story 2.3)*
 - **`control/control.heartbeat.v1`** data-payload schema + valid example + known-bad fixture — the 1 s
   bus-only liveness signal emitted by **every** service (payload `service`, `at`, `instanceId`; `at`
   carries the canonical timestamp `pattern`). Like `privacy.erased`, it is **cross-cutting**: each

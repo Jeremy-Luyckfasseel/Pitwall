@@ -69,8 +69,9 @@ func TestLoadAll_CoversTheFourReliabilityScenariosPlusSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
 	}
-	// AC1: publish-redeliver, inbox-dup, crash-after-ack, peer-down + the smoke (AC2).
-	want := []string{"crash-after-ack", "inbox-dup", "peer-down", "publish-redeliver", "smoke"}
+	// AC1: publish-redeliver, inbox-dup, crash-after-ack, peer-down + the smoke (AC2);
+	// + checkin-chain (Story 2.3 gate check-in / Identity chain).
+	want := []string{"checkin-chain", "crash-after-ack", "inbox-dup", "peer-down", "publish-redeliver", "smoke"}
 	got := map[string]bool{}
 	for _, s := range all {
 		got[s.Name] = true

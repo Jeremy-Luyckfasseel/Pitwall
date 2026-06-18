@@ -1324,3 +1324,54 @@ behavior change with a large blast radius; out of scope for a Story 2.2 review f
 decision. Also pinned: `identity.resolved.masterId` now carries the strict **v4** `pattern`
 (`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`), matching the `lap.recorded`
 precedent and AC1's "lowercase UUID-v4" requirement (it previously had `format: "uuid"` only).
+
+## Round 32 — Story 2.3 gate check-in: Identity chaining, transponder-map scope & the `driver.checked_in` payload (2026-06-18)
+
+> Surfaced while drafting **Story 2.3** (QR-embedded `masterId` + gate check-in). Three decisions were
+> **not** settled by any existing doc/ADR/Q&A, so per the golden rule (CLAUDE.md §0) they were **asked, not
+> assumed**. Context: the Timing simulator (Story 1.5) currently mints **fixture** `masterId`s and goes
+> straight to laps — its own code comment forecasts "real Identity-issued ids replace them in Epic 2."
+> **Q30.2** already pinned Story 2.3 as "the first time Identity actually chains into a multi-service
+> observable flow." **No new ADR** — this realizes the existing FR4/FR32 check-in design (timing.md Round 6,
+> Q5.3/Q6.1–Q6.3) and the Epic-2 plan; it changes no architectural decision.
+
+**Q32.1 — In Story 2.3, how does the gate check-in obtain the canonical `masterId`?**
+A: **The simulator resolves each driver via Identity before check-in.** For every fixture driver the
+simulator publishes `identity.lookup_requested {requestId, email}` and consumes `identity.resolved`, then uses
+the **real Identity-issued `masterId`** for `driver.checked_in` and all subsequent `lap.recorded` — replacing
+the locally-minted fixture ids (exactly the Epic-2 swap the simulator's own comment forecasts). This adds an
+`identity.resolved` **consumer** to Timing (timing.md already lists Timing consuming `identity.resolved` "when
+registering a walk-in token"). The **conformance harness is extended** (per Q30.2) to run Identity + Timing +
+Leaderboard and assert the `masterId` that came out of `identity.resolved` is the **same** id that appears in
+`driver.checked_in` and on the Leaderboard board — proving the canonical-id chain end-to-end. *Scope guard:*
+this is the **happy register-then-check-in chain only**; register-**first enforcement** (a lap is never
+emitted for an unresolved token) and the **unknown-token-at-the-line operator exception** remain **Story 2.5**.
+*Rejected:* keeping the simulator on fixture ids and proving the link only in an isolated harness scenario —
+the simulator would still mint its own ids, so Identity would not actually be chained into Timing's real
+output, defeating Q30.2's intent and deferring the unavoidable fixture→real-id swap with no benefit.
+
+**Q32.2 — Story 2.3 needs transponder→`masterId` *resolution* (AC2), but the mapping's *assignment at
+hand-out* is Story 2.4. What lands in 2.3?**
+A: **2.3 builds the transponder→`masterId` map store + the gate resolution read path; the hand-out
+assignment trigger lands in 2.4.** Timing gains a local `transponder_map` store (its own DB slice, keyed on
+the hardware id) with a direct upsert seam used by tests/seeding, plus the **resolution** logic: a gate scan
+carrying a `transponderId` is resolved to its `masterId` via the map before `driver.checked_in` is emitted
+(`checkInMethod: "transponder"`). The **assignment-at-hand-out trigger, latest-wins reassignment, and its
+logging** are **Story 2.4** (it wires *when* a mapping is written; 2.3 owns the store + the read). A scan for a
+transponder **absent** from the map is **not** minted/guessed — it is the register-first/unknown-token concern
+deferred to **Story 2.5** (in 2.3 the simulator only ever checks in transponder drivers whose mapping it has
+seeded). *Rejected:* QR-only in 2.3 (moving all transponder handling to 2.4) — that drops 2.3's stated AC2 and
+splits one cohesive read/write feature awkwardly across two stories.
+
+**Q32.3 — What is the `timing/driver.checked_in.v1` data payload (a new wire event)?**
+A: `data: { masterId (required, lowercase UUID-v4 pattern), at (required, RFC3339 UTC, 3-digit ms, literal
+Z), checkInMethod (required, enum ["qr","transponder"]), transponderId (string|null) }`, with
+`additionalProperties: true` (tolerant reader / additive evolution, never `additionalProperties:false`). This
+mirrors the `lap.recorded` precedent (same strict `masterId`/`at` patterns; `transponderId` nullable and
+**always present** — null for QR drivers). `checkInMethod` records **how** the driver was identified at the
+gate (QR-direct vs transponder-resolved). **No `sessionId`** — check-in marks presence at the entry gate and
+is not itself session-scoped (a tab opens on check-in, Q11.x/Epic 7; laps carry their own `sessionId`).
+Published to **`timing.events`** with routing key `driver.checked_in`. A valid example **and** a known-bad
+fixture ship with the schema (AR12). *Rejected:* a bare `{masterId, at}` (loses the QR-vs-transponder
+provenance a future consumer/audit wants, and adding it later is a schema change); adding `sessionId` now
+(check-in is gate-scoped, not session-scoped — would invent an unmodeled coupling).

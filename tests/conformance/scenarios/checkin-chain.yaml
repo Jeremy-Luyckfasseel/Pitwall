@@ -1,0 +1,26 @@
+name: checkin-chain
+title: Identity → gate check-in → board — the canonical-id chain end-to-end
+description: >
+  Story 2.3 (AC1/AC2/AC3, Q&A Round 32). The REAL Identity + Timing (simulator,
+  register-first) + Leaderboard binaries run against one shared RabbitMQ. The
+  simulator resolves each driver's canonical masterId via Identity
+  (identity.lookup_requested → identity.resolved) BEFORE the gate, emits one
+  driver.checked_in per driver (QR-direct or transponder-resolved), then laps. The
+  harness observes the bus and asserts the SAME masterId set flows
+  identity.resolved → driver.checked_in → the Leaderboard board, that exactly N
+  check-ins are seen with the expected qr/transponder method split, and that the
+  board converges to those real ids and finishes. Proves Identity is genuinely
+  chained into Timing's output (not minting fixtures).
+proves: [M3, M6, M7]
+quarantine: false
+simulator:
+  drivers: 4
+  transponders: 1
+  sessionLaps: 2
+  seed: 2222
+expect:
+  boardDrivers: 4
+  rankedAscending: true
+  sessionFinished: true
+  checkedIn: 4
+  transponderCheckIns: 1

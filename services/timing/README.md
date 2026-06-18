@@ -55,9 +55,19 @@ here is **extracted** to `libs/go-pitwall` in Epic 2 (grow-don't-pre-scaffold).
   is tracked **per driver**. The simulator keeps `SIM_LAP_MEAN_MS` well above
   `MIN_LAP_TIME_MS`, so on clean simulated input the filter rejects nothing.
 
-> **Fixture masterIds are NOT an identity path.** The simulator mints N valid-format
-> UUID-v4 ids locally for its drivers; real Identity-issued ids replace them in
-> Epic 2. No id-minting path is baked into the skeleton.
+> **Register-first (Story 2.3): the simulator resolves REAL ids via Identity.** It no
+> longer mints fixtures — before a driver goes on track it publishes
+> `identity.lookup_requested` (to `frontend.events`, impersonating the registration
+> producer) and consumes `identity.resolved`, then uses that canonical `masterId` for
+> `driver.checked_in` and every `lap.recorded`. Timing thus becomes **dual-role** (its
+> first inbound consumer); a `Resolver` (`internal/consumer`) retries the lookup until
+> Identity replies, so a cold start or Identity restart recovers rather than hangs.
+>
+> **Gate check-in.** Each session now opens with one `driver.checked_in` per driver at
+> the entry gate: QR drivers carry the `masterId` directly (`checkInMethod:"qr"`);
+> transponder drivers (`SIM_TRANSPONDERS`) carry a hardware id resolved via Timing's
+> local **`transponder_map`** (`checkInMethod:"transponder"`). The map's store +
+> resolution live here; the hand-out assignment trigger is Story 2.4 (Q&A Round 32).
 >
 > The producer seam is `relay.NewEnqueuer(db, store, validate, relay)` (commits the
 > outbox row in its own tx, then kicks the relay). The **consumer-side session gating /
@@ -70,10 +80,11 @@ here is **extracted** to `libs/go-pitwall` in Epic 2 (grow-don't-pre-scaffold).
 |---|---|---|---|
 | out | `control.heartbeat` | `timing.events` / `control.heartbeat` | cross-cutting liveness; payload `service`, `at`, `instanceId` (Q&A Round 25) |
 | out | `session.started` | `timing.events` / `session.started` | ACTUAL session start (simulator-generated); operator-driven path is Epic 11 |
+| out | `driver.checked_in` | `timing.events` / `driver.checked_in` | gate check-in (Story 2.3); `masterId`, `at`, `checkInMethod` (`qr`\|`transponder`), nullable `transponderId` |
 | out | `lap.recorded` | `timing.events` / `lap.recorded` | one per counted lap; `lapTimeMs` = delta from previous valid crossing |
 | out | `session.ended` | `timing.events` / `session.ended` | carries a minimal per-driver `summary` (tolerant/unpinned v1) |
-
-Consumes nothing yet (the idempotent inbox arrives in later Epic-1 stories).
+| out | `identity.lookup_requested` | `frontend.events` / `identity.lookup_requested` | register-first lookup (Story 2.3); simulator impersonates the Frontend producer (`source:"frontend"`) |
+| in | `identity.resolved` | `identity.events` / `identity.resolved` | Identity's reply; idempotent inbox + DLQ/retry/parking; signals the waiting register-first lookup |
 
 ## Run
 
@@ -127,6 +138,12 @@ go test -tags=integration ./test/integration/...# real RabbitMQ via testcontaine
 | `SIM_TICK_MS` | `250` | wall-clock pacing between emitted events |
 | `SIM_SESSION_GAP_MS` | `5000` | pause between sessions in the continuous loop |
 | `SIM_SEED` | *(time-seeded)* | optional integer for a reproducible session |
+| `SIM_TRANSPONDERS` | `0` | how many sim drivers check in via a transponder (rest QR); `0..SIM_DRIVERS` (Story 2.3) |
+| `CONSUME_PREFETCH` | `16` | QoS for the `identity.resolved` consumer (> 0) |
+| `DLQ_MAX_ATTEMPTS` | `5` | consumer DLQ: processing attempts before parking (Q&A Round 27) |
+| `DLQ_RETRY_BASE_MS` | `1000` | consumer DLQ: first retry-hop backoff (ms) |
+| `DLQ_RETRY_MULTIPLIER` | `2` | consumer DLQ: exponential backoff factor |
+| `DLQ_RETRY_MAX_MS` | `60000` | consumer DLQ: per-hop backoff ceiling (ms, ≥ base) |
 
 When `SIMULATOR_ENABLED` is on, the five **required** knobs above must be set or the
 service **fails fast** at startup naming each missing/invalid one (golden rule — never
@@ -147,7 +164,8 @@ internal/persistence/        # FACADE over libs/go-pitwall/persistence: Timing's
                              #   table DDL) + Open wiring (db/outbox mechanics live in the lib)
 internal/relay/              # FACADE over libs/go-pitwall/relay (outbox relay + producer seam)
 internal/domain/             # pure crossing -> lap rule (start marker, per-driver delta/lapNumber, min-lap filter)
-internal/simulator/          # the env-toggled simulator: drivers, distribution, session lifecycle
+internal/consumer/           # identity.resolved consumer (Handler + DLQ) + the register-first Resolver bridge (Story 2.3)
+internal/simulator/          # the env-toggled simulator: register-first resolve, gate check-ins, distribution, session lifecycle
 internal/heartbeat/          # FACADE over libs/go-pitwall/heartbeat (1 s emitter + liveness touch-file)
 internal/hygiene/            # source guard test (no bare prints)
 # Shared blueprint mechanics (logger, envelope+validator, outbox/inbox, messaging
