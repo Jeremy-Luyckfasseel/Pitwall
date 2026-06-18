@@ -1237,3 +1237,90 @@ A: A **non-colliding loopback port** in the prod overlay (`docker-compose.prod.y
 in-container `:8080` unchanged — the base file's `127.0.0.1:${LEADERBOARD_HTTP_PORT:-8080}:8080` is
 overridden on the VPS via `LEADERBOARD_HTTP_PORT` in the VPS `.env` so it never clashes with `dozzle`
 (`8080`) or the AI-bot dashboard (`8081`). The exact value is VPS-`.env` config, not committed.
+
+## Round 30 — Identity resolve-or-mint: contract placement & test scope (2026-06-15)
+
+> Decided during the build phase (Epic 2, **Story 2.2** — Identity resolves or mints exactly one
+> `masterId` per person). The *design* was already pinned: **FR1–FR3 / NFR15** (Identity is sole issuer,
+> de-dupes on email, stores only `masterId`+email+status+timestamps), **ADR-0003** (Identity as UUID
+> issuer), and the **`identity.resolved` schema** + the message-bus rule that **`.requested` intents are
+> published to the originating service's own exchange** (`02-message-bus-and-contracts.md` §"Note: intents
+> … originating service's own exchange"; `contract/README.md` Events rule). What was **not pinned** — and
+> the docs forbid inventing — were two build-time specifics surfaced by create-story for 2.2: (1) which
+> `/contract` namespace folder the **new** `identity.lookup_requested.v1` schema+example lives in (the tree
+> is mixed — `frontend/` holds the frontend-originated intents, but `privacy/privacy.erased` is filed
+> by-entity even though its source varies, and the message-bus catalog lists `identity.lookup_requested`
+> under a *logical* `### identity.events` grouping); and (2) how far 2.2's "e2e" test layer reaches given
+> the cross-language conformance harness today launches only the Timing+Leaderboard binaries. **No new ADR**
+> — these realize the existing identity design and contract rules, changing no decision.
+
+**Q30.1 — Which `/contract` namespace folder holds the new `identity.lookup_requested.v1` schema + example?**
+A: **`contract/schemas/frontend/` + `contract/examples/frontend/`.** It is filed with the other
+frontend-originated `.requested` intents (`profile.edit_requested`, `schedule.change_requested`,
+`session.control_requested`, `privacy.erasure_requested`, `privacy.export_requested`). This matches the
+normative rule that intents are published to the **originating** service's own exchange (`frontend.events`),
+which Identity binds its consumer queue to — so the folder reflects the physical publishing exchange. The
+test producer (a Frontend stand-in, since Frontend itself is Epic 5) emits the envelope with
+`source: "frontend"`. The message-bus catalog's `### identity.events` row for `identity.lookup_requested` is
+a **logical grouping, not the physical exchange** (same caveat the catalog already makes for `control.events`
+and `privacy.*`). The reply `identity.resolved` stays under `identity/` (it *is* published to
+`identity.events`, source `identity`). *Rejected:* filing the request under `identity/` to keep the
+request/reply pair co-located — appealing, but the folder would then misrepresent the publishing exchange and
+break the consistent "frontend intents live in `frontend/`" precedent. Counter (Bar/POS) walk-in
+registration (Q22.3, Epic 7) will publish the *same* `identity.lookup_requested` schema to `bar.events`;
+the single schema file is referenced from both — its folder marks the **primary** origin, not the only one.
+
+**Q30.2 — How far does Story 2.2's "e2e" test layer reach?**
+A: **Integration-only for 2.2; keep the existing conformance smoke green.** Resolve-or-mint is covered by
+**thorough per-service integration tests** (real RabbitMQ + SQLite via testcontainers): mint-on-unknown
+email, reuse-on-known email (no duplicate, no `isNew`), redelivery/replay idempotent (same email → same
+`masterId`), concurrent same-email race → exactly one `masterId` (unique-constraint single-writer),
+malformed lookup → log + dead-letter (DLQ), and bus-bounce survival via the outbox. The existing
+**Timing→Leaderboard cross-language conformance smoke stays green** — Identity is purely additive to it and
+is **not** wired into the conformance harness in this story. The harness is extended in **Story 2.3** (gate
+check-in), which is the first time Identity actually *chains* into a multi-service observable flow; doing it
+there avoids building harness scaffolding in 2.2 that 2.3 would rework. *Rejected:* teaching the conformance
+harness to launch the Identity binary + adding an identity scenario now (premature — no multi-service
+identity flow exists until 2.3).
+
+## Round 31 — Identity email natural-key: normalization & wire validation (2026-06-18)
+
+> Surfaced by the **Story 2.2 code review** (three adversarial layers converged). The design pins Identity as
+> de-duplicating on **email** to issue **exactly one `masterId` per person** (FR1/FR2/FR3/NFR15, ADR-0003),
+> but **no document specified the canonical form of that email** nor how its shape is enforced on the wire. As
+> built, Identity keyed `UNIQUE(email)` on the raw string (SQLite binary, case-sensitive) and stored the value
+> untrimmed, so `Jeremy@x.com`, `jeremy@x.com`, and `" jeremy@x.com "` would mint **different** `masterId`s —
+> contradicting AC2 ("exactly one canonical id per person"). Separately, the `email` field carried only
+> JSON-Schema `format: "email"`, which is **annotation-only (not asserted)** in the repo's validator (see
+> `libs/go-pitwall/messaging/validate_test.go` — "format is annotation-only, so this must be caught by the
+> pinned pattern"), so `"xxx"` validated and could be stored as a person's natural key. Per the golden rule
+> (CLAUDE.md §0) these unspecified behaviors were **asked, not assumed**. **No new ADR** — this realizes the
+> existing FR1–FR3 / NFR15 de-dup intent and the `contract/README.md` "validate every message" rule; it
+> changes no architectural decision.
+
+**Q31.1 — What is the canonical form of the email natural key, and where is it normalized?**
+A: **Identity normalizes — trim surrounding whitespace and lowercase the entire address — before it
+de-duplicates, stores, and echoes the value.** Identity is the **authoritative** point of normalization: it
+does not trust producers to send a canonical form (the lookup can originate from Frontend online registration,
+and later the Bar/POS counter walk-in — Q22.3/Epic 7 — so relying on every producer to normalize is fragile).
+The normalized form is used as the single key for both the `INSERT … ON CONFLICT(email)` and the post-conflict
+`SELECT`, is the value persisted in `identities.email`, and is the `data.email` echoed in `identity.resolved`.
+Consequence: case- and whitespace-variant addresses for one person resolve to **one** `masterId`, satisfying
+AC2. *Rejected:* (a) a wire-contract rule mandating senders submit trimmed-lowercase email — pushes the
+guarantee onto every current and future producer and still needs a defensive normalize in Identity, so it adds
+a cross-language wire rule for no extra safety; (b) trim-only / case-sensitive (RFC-5321-strict local part) —
+technically defensible but wrong for this platform, where one human with one mailbox must be one person.
+
+**Q31.2 — How is email *shape* enforced on the wire (since `format` is annotation-only)?**
+A: **Add a pragmatic email `pattern` to the schema** (`^[^@\s]+@[^@\s]+\.[^@\s]+$` — a non-empty local part,
+an `@`, and a dotted domain, no embedded whitespace) on the `email` field of **both**
+`frontend/identity.lookup_requested.v1` and `identity/identity.resolved.v1`, plus a known-bad fixture whose
+**email** is the sole reason for rejection (a valid `requestId`, a malformed email) so the pattern is proven to
+bite. This mirrors how the corpus already pins `requestId`/`masterId` via an explicit `pattern` rather than
+relying on `format`. The pattern is **case-tolerant** (allows uppercase) because validate-on-consume runs on
+the **raw** envelope *before* Identity normalizes — the producer may legitimately send `Foo@X.com`. *Rejected:*
+enabling format-assertion globally in the shared validator — correct in spirit but a corpus-wide, cross-language
+behavior change with a large blast radius; out of scope for a Story 2.2 review fix and better raised as its own
+decision. Also pinned: `identity.resolved.masterId` now carries the strict **v4** `pattern`
+(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`), matching the `lap.recorded`
+precedent and AC1's "lowercase UUID-v4" requirement (it previously had `format: "uuid"` only).

@@ -1,0 +1,15 @@
+{
+  "_invalidReason": "email 'not-an-email' has no '@' and no dotted domain, so it violates the asserted email shape pattern ('format' alone is annotation-only). requestId is a valid lowercase UUID, so the email pattern is the SOLE catch — proving it bites (Q&A Round 31). The data-pass must reject it.",
+  "id": "018f9e2a-7c3d-7b21-9c4e-2a1b3c4d5e6f",
+  "type": "identity.lookup_requested",
+  "source": "frontend",
+  "schemaVersion": 1,
+  "envelopeVersion": 1,
+  "occurredAt": "2026-06-15T09:14:02.117Z",
+  "correlationId": "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
+  "causationId": null,
+  "data": {
+    "requestId": "aa11bb22-cc33-4dd4-8ee5-ff6677889900",
+    "email": "not-an-email"
+  }
+}

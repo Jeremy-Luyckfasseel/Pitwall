@@ -7,6 +7,7 @@ go 1.26.4
 
 use (
 	./libs/go-pitwall
+	./services/identity
 	./services/leaderboard
 	./services/timing
 	./tests/conformance/go
