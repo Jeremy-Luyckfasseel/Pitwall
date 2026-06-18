@@ -29,7 +29,14 @@ func newResolver(t *testing.T) (*sql.DB, *consumer.TxResolver, *counter) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	mint := &counter{seq: []string{"id-1", "id-2", "id-3"}}
+	// The candidate masterIds MUST be lowercase UUID v4 — the reply is validated
+	// against /contract on enqueue (ValidateOut), and identity.resolved.masterId pins
+	// the strict v4 pattern (AC1, Q&A Round 31).
+	mint := &counter{seq: []string{
+		"11111111-1111-4111-8111-111111111111",
+		"22222222-2222-4222-8222-222222222222",
+		"33333333-3333-4333-8333-333333333333",
+	}}
 	r := &consumer.TxResolver{
 		DB:          db,
 		Store:       persistence.NewStore(db),
@@ -74,8 +81,8 @@ func TestTxResolver_MintEnqueuesValidReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if !res.Minted || res.MasterID != "id-1" {
-		t.Fatalf("res = %+v; want minted id-1", res)
+	if !res.Minted || res.MasterID != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("res = %+v; want minted 11111111-1111-4111-8111-111111111111", res)
 	}
 	if n := identityCount(t, db); n != 1 {
 		t.Fatalf("identities = %d; want 1", n)
