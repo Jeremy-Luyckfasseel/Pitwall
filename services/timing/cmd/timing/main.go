@@ -192,8 +192,8 @@ func run() int {
 			Now:          time.Now,
 			Enqueue:      enqueue,
 			Resolve:      resolver.Resolve,
-			SeedTransponder: func(ctx context.Context, transponderID, masterID string) error {
-				return tpStore.Upsert(ctx, transponderID, masterID, messaging.FormatWireTime(time.Now()))
+			AssignTransponder: func(ctx context.Context, transponderID, masterID string) (bool, string, error) {
+				return tpStore.Assign(ctx, transponderID, masterID, messaging.FormatWireTime(time.Now()))
 			},
 			Log: log,
 		})

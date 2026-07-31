@@ -11,7 +11,8 @@
 // publish identity.lookup_requested, consume identity.resolved), and then uses the real
 // Identity-issued masterId for driver.checked_in and every lap.recorded. QR drivers
 // carry the masterId directly; transponder drivers' hardware-id->masterId mapping is
-// seeded (the SeedTransponder seam) so the gate resolves it. This is the happy
+// assigned via the hand-out trigger (Story 2.4, the AssignTransponder seam — reassigning
+// a transponder logs the change) so the gate resolves it. This is the happy
 // register-then-check-in chain only; register-FIRST enforcement + the unknown-token
 // operator exception remain Story 2.5.
 //
@@ -53,11 +54,14 @@ type Config struct {
 	// bus request/reply (identity.lookup_requested -> identity.resolved); in tests it is
 	// a deterministic fake. Required.
 	Resolve func(ctx context.Context, email string) (masterID string, err error)
-	// SeedTransponder binds a transponder driver's hardware id to its resolved masterId
-	// in Timing's local map (so the gate resolves it). The generic hand-out trigger is
-	// Story 2.4; here the simulator hands out its own transponders at registration.
-	SeedTransponder func(ctx context.Context, transponderID, masterID string) error
-	Log             *slog.Logger
+	// AssignTransponder is the hand-out trigger (Story 2.4, FR33): it binds a transponder
+	// driver's hardware id to its resolved masterId in Timing's local map (so the gate
+	// resolves it) and reports whether the hand-out CHANGED an existing mapping to a
+	// different driver (reassigned, previousMasterID) so Prepare can log it (AC2). The
+	// simulator calls it standing in for counter/kiosk staff (no Bar/POS or Frontend
+	// Admin hand-out surface exists yet); a future real surface calls the same trigger.
+	AssignTransponder func(ctx context.Context, transponderID, masterID string) (reassigned bool, previousMasterID string, err error)
+	Log               *slog.Logger
 }
 
 // driver is one simulated racer. masterID is empty until Prepare resolves it.
@@ -115,12 +119,13 @@ func (s *Simulator) DriverIDs() []string {
 func (s *Simulator) now() time.Time { return s.cfg.Now() }
 
 // Prepare resolves every driver's canonical masterId via Identity (once — Identity is
-// idempotent) and seeds each transponder driver's hardware-id->masterId mapping so the
-// gate can resolve it. It is the register-first step; Run calls it before the first
-// session. Resolve BLOCKS per driver until Identity replies or ctx is cancelled
-// (register-first: a driver never goes on track without an id) — a transient stall is
-// re-tried + escalated to an alert by the resolver, while a PERMANENT publish failure
-// (a malformed lookup) returns immediately so Prepare fails fast and Run logs it.
+// idempotent) and, for transponder drivers, hands out their hardware-id->masterId
+// mapping via AssignTransponder so the gate can resolve it. It is the register-first
+// step; Run calls it before the first session. Resolve BLOCKS per driver until Identity
+// replies or ctx is cancelled (register-first: a driver never goes on track without an
+// id) — a transient stall is re-tried + escalated to an alert by the resolver, while a
+// PERMANENT publish failure (a malformed lookup) returns immediately so Prepare fails
+// fast and Run logs it.
 func (s *Simulator) Prepare(ctx context.Context) error {
 	for i := range s.drivers {
 		id, err := s.cfg.Resolve(ctx, s.drivers[i].email)
@@ -129,8 +134,15 @@ func (s *Simulator) Prepare(ctx context.Context) error {
 		}
 		s.drivers[i].masterID = id
 		if s.drivers[i].method == messaging.CheckInMethodTransponder {
-			if err := s.cfg.SeedTransponder(ctx, s.drivers[i].transponderID, id); err != nil {
-				return fmt.Errorf("seed transponder %s: %w", s.drivers[i].transponderID, err)
+			tp := s.drivers[i].transponderID
+			reassigned, previous, err := s.cfg.AssignTransponder(ctx, tp, id)
+			if err != nil {
+				return fmt.Errorf("assign transponder %s: %w", tp, err)
+			}
+			if reassigned {
+				s.logWarn("transponder reassigned", "transponderId", tp, "previousMasterId", previous, "masterId", id)
+			} else {
+				s.logInfo("transponder handed out", "transponderId", tp, "masterId", id)
 			}
 		}
 	}
@@ -271,6 +283,12 @@ func (s *Simulator) drawLapMs() int {
 func (s *Simulator) logInfo(msg string, args ...any) {
 	if s.cfg.Log != nil {
 		s.cfg.Log.Info(msg, args...)
+	}
+}
+
+func (s *Simulator) logWarn(msg string, args ...any) {
+	if s.cfg.Log != nil {
+		s.cfg.Log.Warn(msg, args...)
 	}
 }
 

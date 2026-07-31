@@ -5,14 +5,59 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"math/rand"
 	"reflect"
 	"regexp"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/timing/internal/messaging"
 )
+
+// logCapture is a minimal slog.Handler that records emitted log lines for assertion —
+// this package has no existing log-capture helper, so Story 2.4 adds this narrow one to
+// prove Prepare logs a hand-out vs a reassignment (AC1/AC2), rather than pulling in a
+// third-party test-logging dependency for two assertions.
+type logCapture struct {
+	mu      sync.Mutex
+	records []capturedRecord
+}
+
+type capturedRecord struct {
+	level slog.Level
+	msg   string
+	attrs map[string]string
+}
+
+func (c *logCapture) Enabled(context.Context, slog.Level) bool { return true }
+
+func (c *logCapture) Handle(_ context.Context, r slog.Record) error {
+	attrs := map[string]string{}
+	r.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.String()
+		return true
+	})
+	c.mu.Lock()
+	c.records = append(c.records, capturedRecord{level: r.Level, msg: r.Message, attrs: attrs})
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *logCapture) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c *logCapture) WithGroup(string) slog.Handler      { return c }
+
+func (c *logCapture) find(msg string) (capturedRecord, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, r := range c.records {
+		if r.msg == msg {
+			return r, true
+		}
+	}
+	return capturedRecord{}, false
+}
 
 var v4Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
@@ -34,17 +79,19 @@ func fakeResolve(_ context.Context, email string) (string, error) {
 
 func testConfig(rng *rand.Rand) Config {
 	return Config{
-		Drivers:         4,
-		Transponders:    0, // default: all QR (the smoke's shape); >0 exercises the map path
-		LapMeanMs:       45000,
-		LapStddevMs:     2000,
-		SessionLaps:     5,
-		MinLapTimeMs:    10000, // filter active, but well below the mean -> rejects nothing
-		Source:          "timing",
-		Rng:             rng,
-		Now:             func() time.Time { return time.Date(2026, 6, 5, 14, 0, 0, 0, time.UTC) },
-		Resolve:         fakeResolve,
-		SeedTransponder: func(context.Context, string, string) error { return nil },
+		Drivers:      4,
+		Transponders: 0, // default: all QR (the smoke's shape); >0 exercises the map path
+		LapMeanMs:    45000,
+		LapStddevMs:  2000,
+		SessionLaps:  5,
+		MinLapTimeMs: 10000, // filter active, but well below the mean -> rejects nothing
+		Source:       "timing",
+		Rng:          rng,
+		Now:          func() time.Time { return time.Date(2026, 6, 5, 14, 0, 0, 0, time.UTC) },
+		Resolve:      fakeResolve,
+		AssignTransponder: func(context.Context, string, string) (bool, string, error) {
+			return false, "", nil
+		},
 	}
 }
 
@@ -144,18 +191,19 @@ func TestGenerateSession_CoherentValidatedStream(t *testing.T) {
 }
 
 // A transponder driver checks in with checkInMethod:"transponder" + its hardware id,
-// and its mapping is seeded (so the gate resolves it) — Prepare calls SeedTransponder
-// with the resolved masterId. QR drivers check in with checkInMethod:"qr", null hw id.
-func TestPrepareAndGenerate_TransponderDriverCheckedInAndSeeded(t *testing.T) {
+// and its mapping is assigned (so the gate resolves it) — Prepare calls the hand-out
+// trigger AssignTransponder with the resolved masterId. QR drivers check in with
+// checkInMethod:"qr", null hw id.
+func TestPrepareAndGenerate_TransponderDriverCheckedInAndAssigned(t *testing.T) {
 	cfg := testConfig(rand.New(rand.NewSource(2)))
 	cfg.Drivers = 3
 	cfg.Transponders = 1 // the first driver uses a transponder; the other two QR
 
 	type seed struct{ tp, master string }
 	var seeds []seed
-	cfg.SeedTransponder = func(_ context.Context, tp, master string) error {
+	cfg.AssignTransponder = func(_ context.Context, tp, master string) (bool, string, error) {
 		seeds = append(seeds, seed{tp, master})
-		return nil
+		return false, "", nil
 	}
 
 	s := prepared(t, cfg)
@@ -264,6 +312,61 @@ func TestRun_EmitsSessionAndStopsOnCancel(t *testing.T) {
 	}
 	if got[len(got)-1].Type != messaging.SessionEndedRoutingKey {
 		t.Errorf("expected session.ended last, got %q", got[len(got)-1].Type)
+	}
+}
+
+// A first-time hand-out (AssignTransponder returns reassigned=false) logs a plain
+// "transponder handed out" info line, and must NOT log a reassignment (AC1).
+func TestPrepare_LogsTransponderHandOut(t *testing.T) {
+	cap := &logCapture{}
+	cfg := testConfig(rand.New(rand.NewSource(9)))
+	cfg.Drivers, cfg.Transponders = 1, 1
+	cfg.Log = slog.New(cap)
+	cfg.AssignTransponder = func(context.Context, string, string) (bool, string, error) {
+		return false, "", nil
+	}
+	prepared(t, cfg)
+
+	rec, ok := cap.find("transponder handed out")
+	if !ok {
+		t.Fatalf("expected a %q log line, got %+v", "transponder handed out", cap.records)
+	}
+	if rec.level != slog.LevelInfo {
+		t.Errorf("hand-out log level = %v, want Info", rec.level)
+	}
+	if rec.attrs["transponderId"] == "" || rec.attrs["masterId"] == "" {
+		t.Errorf("hand-out log missing transponderId/masterId attrs: %+v", rec.attrs)
+	}
+	if _, reassignLogged := cap.find("transponder reassigned"); reassignLogged {
+		t.Errorf("first-time hand-out must not log a reassignment")
+	}
+}
+
+// A reassignment (AssignTransponder returns reassigned=true) logs a "transponder
+// reassigned" warn line carrying the previous and new masterId (AC2).
+func TestPrepare_LogsTransponderReassignment(t *testing.T) {
+	cap := &logCapture{}
+	cfg := testConfig(rand.New(rand.NewSource(10)))
+	cfg.Drivers, cfg.Transponders = 1, 1
+	cfg.Log = slog.New(cap)
+	const previous = "9f8e7d6c-5b4a-4321-8765-0a1b2c3d4e5f"
+	cfg.AssignTransponder = func(context.Context, string, string) (bool, string, error) {
+		return true, previous, nil
+	}
+	prepared(t, cfg)
+
+	rec, ok := cap.find("transponder reassigned")
+	if !ok {
+		t.Fatalf("expected a %q log line, got %+v", "transponder reassigned", cap.records)
+	}
+	if rec.level != slog.LevelWarn {
+		t.Errorf("reassignment log level = %v, want Warn", rec.level)
+	}
+	if rec.attrs["previousMasterId"] != previous {
+		t.Errorf("reassignment log previousMasterId = %q, want %q", rec.attrs["previousMasterId"], previous)
+	}
+	if rec.attrs["transponderId"] == "" || rec.attrs["masterId"] == "" {
+		t.Errorf("reassignment log missing transponderId/masterId attrs: %+v", rec.attrs)
 	}
 }
 
