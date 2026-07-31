@@ -318,18 +318,18 @@ func TestRun_EmitsSessionAndStopsOnCancel(t *testing.T) {
 // A first-time hand-out (AssignTransponder returns reassigned=false) logs a plain
 // "transponder handed out" info line, and must NOT log a reassignment (AC1).
 func TestPrepare_LogsTransponderHandOut(t *testing.T) {
-	cap := &logCapture{}
+	logs := &logCapture{}
 	cfg := testConfig(rand.New(rand.NewSource(9)))
 	cfg.Drivers, cfg.Transponders = 1, 1
-	cfg.Log = slog.New(cap)
+	cfg.Log = slog.New(logs)
 	cfg.AssignTransponder = func(context.Context, string, string) (bool, string, error) {
 		return false, "", nil
 	}
 	prepared(t, cfg)
 
-	rec, ok := cap.find("transponder handed out")
+	rec, ok := logs.find("transponder handed out")
 	if !ok {
-		t.Fatalf("expected a %q log line, got %+v", "transponder handed out", cap.records)
+		t.Fatalf("expected a %q log line, got %+v", "transponder handed out", logs.records)
 	}
 	if rec.level != slog.LevelInfo {
 		t.Errorf("hand-out log level = %v, want Info", rec.level)
@@ -337,7 +337,7 @@ func TestPrepare_LogsTransponderHandOut(t *testing.T) {
 	if rec.attrs["transponderId"] == "" || rec.attrs["masterId"] == "" {
 		t.Errorf("hand-out log missing transponderId/masterId attrs: %+v", rec.attrs)
 	}
-	if _, reassignLogged := cap.find("transponder reassigned"); reassignLogged {
+	if _, reassignLogged := logs.find("transponder reassigned"); reassignLogged {
 		t.Errorf("first-time hand-out must not log a reassignment")
 	}
 }
@@ -345,19 +345,19 @@ func TestPrepare_LogsTransponderHandOut(t *testing.T) {
 // A reassignment (AssignTransponder returns reassigned=true) logs a "transponder
 // reassigned" warn line carrying the previous and new masterId (AC2).
 func TestPrepare_LogsTransponderReassignment(t *testing.T) {
-	cap := &logCapture{}
+	logs := &logCapture{}
 	cfg := testConfig(rand.New(rand.NewSource(10)))
 	cfg.Drivers, cfg.Transponders = 1, 1
-	cfg.Log = slog.New(cap)
+	cfg.Log = slog.New(logs)
 	const previous = "9f8e7d6c-5b4a-4321-8765-0a1b2c3d4e5f"
 	cfg.AssignTransponder = func(context.Context, string, string) (bool, string, error) {
 		return true, previous, nil
 	}
 	prepared(t, cfg)
 
-	rec, ok := cap.find("transponder reassigned")
+	rec, ok := logs.find("transponder reassigned")
 	if !ok {
-		t.Fatalf("expected a %q log line, got %+v", "transponder reassigned", cap.records)
+		t.Fatalf("expected a %q log line, got %+v", "transponder reassigned", logs.records)
 	}
 	if rec.level != slog.LevelWarn {
 		t.Errorf("reassignment log level = %v, want Warn", rec.level)

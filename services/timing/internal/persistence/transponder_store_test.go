@@ -132,8 +132,9 @@ func TestAssignTransponder_IdempotentSameDriver(t *testing.T) {
 	}
 }
 
-// Re-handing out the same transponder to a different driver: the latest mapping
-// wins (the store supports it; the hand-out TRIGGER + logging is Story 2.4).
+// Re-handing out the same transponder to a different driver via the raw Upsert seam
+// (used by seeding/tests, not the hand-out trigger — see TestAssignTransponder_* above
+// for Assign's reassignment reporting): the latest mapping wins.
 func TestUpsertTransponder_LatestWins(t *testing.T) {
 	ctx := context.Background()
 	s := openTestDB(t)
