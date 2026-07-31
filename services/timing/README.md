@@ -66,8 +66,12 @@ here is **extracted** to `libs/go-pitwall` in Epic 2 (grow-don't-pre-scaffold).
 > **Gate check-in.** Each session now opens with one `driver.checked_in` per driver at
 > the entry gate: QR drivers carry the `masterId` directly (`checkInMethod:"qr"`);
 > transponder drivers (`SIM_TRANSPONDERS`) carry a hardware id resolved via Timing's
-> local **`transponder_map`** (`checkInMethod:"transponder"`). The map's store +
-> resolution live here; the hand-out assignment trigger is Story 2.4 (Q&A Round 32).
+> local **`transponder_map`** (`checkInMethod:"transponder"`). `TransponderStore.Assign`
+> is the **hand-out trigger** (Story 2.4, FR33): it binds a transponder to a
+> register-first-resolved `masterId`, latest-wins on reassignment, and reports the
+> change so the caller can log it (the simulator's `Prepare` logs a plain hand-out at
+> info, a reassignment at warn with the previous `masterId`). Entirely Timing-internal —
+> no new bus event (Q&A Round 6/Q6.3, Round 32).
 >
 > The producer seam is `relay.NewEnqueuer(db, store, validate, relay)` (commits the
 > outbox row in its own tx, then kicks the relay). The **consumer-side session gating /
