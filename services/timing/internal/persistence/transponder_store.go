@@ -36,6 +36,25 @@ func (s *TransponderStore) Resolve(ctx context.Context, transponderID string) (m
 	return masterID, true, nil
 }
 
+// Assign is the hand-out trigger (Story 2.4, FR33): it binds transponderID to masterID
+// and reports whether this hand-out CHANGED an existing mapping to a different driver.
+// reassigned=false covers both a first-time hand-out (no prior mapping) and an
+// idempotent replay of the same hand-out (previous == masterID) — callers should log a
+// reassignment only when reassigned=true, never a spurious one on a safe replay.
+func (s *TransponderStore) Assign(ctx context.Context, transponderID, masterID, now string) (reassigned bool, previousMasterID string, err error) {
+	previous, ok, err := s.Resolve(ctx, transponderID)
+	if err != nil {
+		return false, "", fmt.Errorf("assign transponder %q: %w", transponderID, err)
+	}
+	if err := s.Upsert(ctx, transponderID, masterID, now); err != nil {
+		return false, "", err
+	}
+	if ok && previous != masterID {
+		return true, previous, nil
+	}
+	return false, "", nil
+}
+
 // Upsert binds transponderID to masterID, latest-wins on re-handout (the store supports
 // reassignment; the hand-out trigger that calls this lands in Story 2.4). created_at is
 // preserved on conflict; updated_at advances to now.

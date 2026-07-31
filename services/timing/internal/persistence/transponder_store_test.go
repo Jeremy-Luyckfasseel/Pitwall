@@ -61,6 +61,77 @@ func TestResolveTransponder_Unknown(t *testing.T) {
 	}
 }
 
+// Assign is the hand-out trigger (Story 2.4, FR33): a first-time hand-out reports
+// reassigned=false (no prior mapping) and the mapping resolves afterward.
+func TestAssignTransponder_FirstHandOut(t *testing.T) {
+	ctx := context.Background()
+	s := openTestDB(t)
+	reassigned, previous, err := s.Assign(ctx, "TP-100", tpMasterA, "2026-07-31T10:00:00.000Z")
+	if err != nil {
+		t.Fatalf("Assign: %v", err)
+	}
+	if reassigned {
+		t.Errorf("Assign(first hand-out) reassigned=true, want false")
+	}
+	if previous != "" {
+		t.Errorf("Assign(first hand-out) previousMasterID=%q, want empty", previous)
+	}
+	got, ok, err := s.Resolve(ctx, "TP-100")
+	if err != nil || !ok {
+		t.Fatalf("Resolve after Assign: ok=%v err=%v", ok, err)
+	}
+	if got != tpMasterA {
+		t.Errorf("Resolve(TP-100) = %q, want %q", got, tpMasterA)
+	}
+}
+
+// Re-handing out to a DIFFERENT masterId is a reassignment: Assign reports it (AC2)
+// and the latest mapping wins.
+func TestAssignTransponder_Reassignment(t *testing.T) {
+	ctx := context.Background()
+	s := openTestDB(t)
+	if _, _, err := s.Assign(ctx, "TP-101", tpMasterA, "2026-07-31T10:00:00.000Z"); err != nil {
+		t.Fatalf("first Assign: %v", err)
+	}
+	reassigned, previous, err := s.Assign(ctx, "TP-101", tpMasterB, "2026-07-31T11:00:00.000Z")
+	if err != nil {
+		t.Fatalf("second Assign: %v", err)
+	}
+	if !reassigned {
+		t.Errorf("Assign(reassignment) reassigned=false, want true")
+	}
+	if previous != tpMasterA {
+		t.Errorf("Assign(reassignment) previousMasterID=%q, want %q", previous, tpMasterA)
+	}
+	got, ok, err := s.Resolve(ctx, "TP-101")
+	if err != nil || !ok {
+		t.Fatalf("Resolve after reassign: ok=%v err=%v", ok, err)
+	}
+	if got != tpMasterB {
+		t.Errorf("Resolve(TP-101) = %q, want the latest %q", got, tpMasterB)
+	}
+}
+
+// Re-handing out to the SAME masterId (an idempotent replay of the hand-out trigger)
+// must NOT report a reassignment — only an actual change of driver counts.
+func TestAssignTransponder_IdempotentSameDriver(t *testing.T) {
+	ctx := context.Background()
+	s := openTestDB(t)
+	if _, _, err := s.Assign(ctx, "TP-102", tpMasterA, "2026-07-31T10:00:00.000Z"); err != nil {
+		t.Fatalf("first Assign: %v", err)
+	}
+	reassigned, previous, err := s.Assign(ctx, "TP-102", tpMasterA, "2026-07-31T10:05:00.000Z")
+	if err != nil {
+		t.Fatalf("second Assign: %v", err)
+	}
+	if reassigned {
+		t.Errorf("Assign(same driver replay) reassigned=true, want false")
+	}
+	if previous != "" {
+		t.Errorf("Assign(same driver replay) previousMasterID=%q, want empty", previous)
+	}
+}
+
 // Re-handing out the same transponder to a different driver: the latest mapping
 // wins (the store supports it; the hand-out TRIGGER + logging is Story 2.4).
 func TestUpsertTransponder_LatestWins(t *testing.T) {
