@@ -52,6 +52,12 @@ type Config struct {
 	// the transponder->masterId map resolution path (Story 2.3, AC2).
 	SimTransponders int
 
+	// UnknownTokenScans is how many synthetic "stray" (unbound-transponder) line
+	// crossings the simulator injects per session — the register-first/unknown-token
+	// operator exception (Story 2.5, FR39). Optional, default 0 (no behavior change);
+	// must be >= 0.
+	UnknownTokenScans int
+
 	// Consumer + DLQ knobs — Timing's FIRST inbound consumer (identity.resolved) arrives
 	// in Story 2.3. ConsumePrefetch bounds in-flight unacked deliveries (QoS, > 0). The
 	// DLQ policy (Story 1.9; values pinned Q&A Round 27) governs retry-then-park.
@@ -207,6 +213,17 @@ func loadSimulator(getenv func(string) string, cfg *Config) error {
 		return fmt.Errorf("SIM_TRANSPONDERS (%d) must be between 0 and SIM_DRIVERS (%d)", transponders, cfg.SimDrivers)
 	}
 	cfg.SimTransponders = transponders
+
+	// SIM_UNKNOWN_TOKEN_SCANS (Story 2.5): optional, default 0; must be >= 0 (not tied
+	// to SimDrivers — it is an independent stray-scan count, not a driver count).
+	unknownTokenScans, err := intEnv(getenv, "SIM_UNKNOWN_TOKEN_SCANS", 0)
+	if err != nil {
+		return err
+	}
+	if unknownTokenScans < 0 {
+		return fmt.Errorf("SIM_UNKNOWN_TOKEN_SCANS must be >= 0, got %d", unknownTokenScans)
+	}
+	cfg.UnknownTokenScans = unknownTokenScans
 
 	// Optional, correctness-neutral pacing knobs (defaults allowed).
 	tick, err := intEnv(getenv, "SIM_TICK_MS", 250)
