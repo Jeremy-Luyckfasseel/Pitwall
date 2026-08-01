@@ -1375,3 +1375,35 @@ Published to **`timing.events`** with routing key `driver.checked_in`. A valid e
 fixture ship with the schema (AR12). *Rejected:* a bare `{masterId, at}` (loses the QR-vs-transponder
 provenance a future consumer/audit wants, and adding it later is a schema change); adding `sessionId` now
 (check-in is gate-scoped, not session-scoped — would invent an unmodeled coupling).
+
+## Round 33 — Story 2.6 Identity erasure: does the tombstone suppress a same-email re-mint? (2026-08-01)
+
+> Surfaced while drafting **Story 2.6** (Identity erasure handler and tombstone). `libs/go-pitwall/erasure`
+> (built ahead of any consumer in Story 2.1) deletes a service's slice and writes a tombstone in one
+> transaction, keyed on `masterId` — but Identity's own slice **is** the email↔`masterId` mapping, and AC2
+> requires that "a late/replayed `identity.lookup_requested` for the same email" not silently re-mint a fresh
+> identity. Full deletion of the email row (Q16.4's "every other service fully deletes") and blocking a future
+> lookup for that same email are in direct tension: deleting the email is exactly what would make a later
+> lookup look like a brand-new person. Nothing in ADR-0009/Q16.3/Q16.4 anticipated this — they were written
+> before any service's natural key doubled as its own erasure target. Not answered anywhere → asked per the
+> golden rule (CLAUDE.md §0). **No new ADR** — this specializes ADR-0009's existing erasure mechanics for
+> Identity's specific SoR shape; it changes no architectural decision.
+
+**Q33.1 — After Identity erases a person, what happens when a NEW `identity.lookup_requested` later arrives
+for that same email (not a redelivery of the same envelope — Story 2.2's existing idempotent inbox already
+fully no-ops an exact redelivery, including suppressing its reply, for free)?**
+A: **Suppress via an irreversible email hash, held exactly like Story 2.5's unknown-token pattern.** On
+erasure, Identity deletes the plaintext email from `identities` (true GDPR delete, satisfies Q16.4) but writes
+a **SHA-256 hash of the normalized email** (Round 31's `NormalizeEmail` — trim+lowercase — applied first, so
+hash equality matches exactly the same set of addresses the live lookup path already treats as one identity)
+into a small suppression record alongside the `masterId` tombstone. A later `identity.lookup_requested` whose
+normalized-email hash matches a suppressed entry is **held**: durably persisted (never dropped, survives a
+restart), logged at alert severity, and Identity **never mints, never replies** — structurally the same shape
+as Story 2.5's `HeldLineScanStore` (hold + persist + flag, no new bus event). The requester's own sad path
+handles the missing reply (same "requester's sad path handles the timeout" convention already documented for
+a malformed lookup). Getting back in after erasure requires an explicit, future, out-of-band capability — out
+of scope here. *Rejected:* no suppression at all (fully delete the email row, let a later lookup for that
+address mint a brand-new `masterId` with no special handling) — simpler and needs no new mechanism, but does
+not satisfy AC2's literal wording ("a late/replayed lookup... would re-mint it... the tombstone is honored"),
+and would let an erased person's email silently become live again with zero record that erasure ever
+happened for that address, undermining the audit trail ADR-0009/Q16.6 requires for privacy actions.
