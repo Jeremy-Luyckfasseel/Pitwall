@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"time"
 
+	goperasure "github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/erasure"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/identity/internal/domain"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/identity/internal/messaging"
 )
@@ -38,13 +39,23 @@ type Resolver interface {
 	Resolve(ctx context.Context, env messaging.IncomingEnvelope, data domain.LookupData) (ResolveResult, error)
 }
 
+// Eraser runs the reusable erasure mechanics (libs/go-pitwall/erasure.Handler satisfies
+// this) for one validated privacy.erasure_requested envelope: inbox-dedupe -> delete
+// slice -> tombstone -> atomically-enqueued privacy.erased ack -> inbox-mark. It is an
+// interface so Handler stays unit-testable with a fake (no DB, no broker).
+type Eraser interface {
+	Handle(ctx context.Context, env messaging.IncomingEnvelope) (goperasure.Result, error)
+}
+
 // Handler processes one delivery at a time (a single Run goroutine drives it).
 type Handler struct {
-	Validate  func([]byte) error // validate-on-consume (envelope + data); nil err = valid
-	Resolver  Resolver
-	Log       *slog.Logger
-	Notify    func() // kick the relay after a fresh reply is enqueued (optional)
-	LookupKey string // == messaging.LookupRequestedRoutingKey
+	Validate   func([]byte) error // validate-on-consume (envelope + data); nil err = valid
+	Resolver   Resolver
+	Erasure    Eraser // handles privacy.erasure_requested (Story 2.6); nil-safe only if ErasureKey is also unset
+	Log        *slog.Logger
+	Notify     func() // kick the relay after a fresh reply/ack is enqueued (optional)
+	LookupKey  string // == messaging.LookupRequestedRoutingKey
+	ErasureKey string // == goperasure.ErasureRequestedType
 
 	// DLQ wiring (Story 1.9). Policy decides retry-vs-park from the redelivery count;
 	// Retry republishes to the retry queue with backoff; Park routes terminally to the
@@ -92,14 +103,36 @@ func (h *Handler) Process(ctx context.Context, d messaging.Delivery) {
 		return
 	}
 
-	if env.Type != h.LookupKey {
+	switch env.Type {
+	case h.LookupKey:
+		h.processLookup(ctx, d, env)
+	case h.ErasureKey:
+		h.processErasure(ctx, d, env)
+	default:
 		// Tolerant reader: a valid type Identity does not handle. Drop it.
 		h.Log.Debug("ignoring unhandled event type", "type", env.Type, "eventId", env.ID)
 		h.ack(d)
+	}
+}
+
+// processErasure runs the erasure mechanics for one privacy.erasure_requested envelope
+// and mirrors processLookup's ack/notify/log shape exactly.
+func (h *Handler) processErasure(ctx context.Context, d messaging.Delivery, env messaging.IncomingEnvelope) {
+	result, err := h.Erasure.Handle(ctx, env)
+	if err != nil {
+		h.retryOrPark(ctx, d, env, err)
 		return
 	}
 
-	h.processLookup(ctx, d, env)
+	h.ack(d)
+	if result.Duplicate {
+		h.Log.Debug("duplicate privacy.erasure_requested ignored (idempotent inbox)", "eventId", env.ID)
+		return
+	}
+	if h.Notify != nil {
+		h.Notify() // the privacy.erased ack is in the outbox; kick the relay to publish promptly
+	}
+	h.Log.Info("identity erased", "eventId", env.ID, "masterId", result.MasterID, "correlationId", env.CorrelationID)
 }
 
 func (h *Handler) processLookup(ctx context.Context, d messaging.Delivery, env messaging.IncomingEnvelope) {
