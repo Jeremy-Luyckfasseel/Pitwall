@@ -149,6 +149,27 @@ func TestProcess_WhitespaceOnlyEmailParksAsBlank(t *testing.T) {
 	}
 }
 
+// AC2 (Round 33/Q33.1): a Held result (email suppressed by a prior erasure) acks the
+// delivery but must NOT kick the relay (no identity.resolved reply was enqueued).
+func TestProcess_HeldAcksWithoutNotify(t *testing.T) {
+	notified := false
+	res := &fakeResolver{result: consumer.ResolveResult{Held: true}}
+	h, parks := newHandler(res, func() { notified = true })
+
+	d := &fakeDelivery{body: lookupBody(t, "018f9e2a-7c3d-7b21-9c4e-2a1b3c4d5e6f", "erased@example.com")}
+	h.Process(context.Background(), d)
+
+	if !d.acked {
+		t.Fatal("a held lookup must still be acked (never dropped)")
+	}
+	if notified {
+		t.Fatal("a held lookup must NOT kick the relay (no identity.resolved was enqueued)")
+	}
+	if len(*parks) != 0 {
+		t.Fatalf("a held lookup is not a DLQ concern; unexpected parks: %v", *parks)
+	}
+}
+
 func TestProcess_DuplicateAcksWithoutNotify(t *testing.T) {
 	notified := false
 	res := &fakeResolver{result: consumer.ResolveResult{MasterID: "id-A", Duplicate: true}}

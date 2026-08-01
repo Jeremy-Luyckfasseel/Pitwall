@@ -29,6 +29,13 @@ type TxResolver struct {
 	Now         func() string      // wire-format timestamp stamp (defaults to now)
 	Source      string             // reply envelope source ("identity")
 	ResolvedKey string             // identity.resolved routing key (topology, injected)
+
+	// IsEmailSuppressed reports whether the (already-hashed) normalized email was
+	// suppressed by a prior erasure (AC2, Round 33/Q33.1) — required.
+	IsEmailSuppressed func(ctx context.Context, tx *sql.Tx, emailHash string) (bool, error)
+	// RecordHeld durably persists a held lookup attempt inside the SAME transaction as
+	// the inbox-mark (AC2 "never dropped") — required.
+	RecordHeld func(ctx context.Context, tx *sql.Tx, requestID, emailHash, occurredAt, recordedAt string) error
 }
 
 // Resolve implements the Resolver interface. A redelivered envelope id is a no-op
@@ -44,6 +51,27 @@ func (r *TxResolver) Resolve(ctx context.Context, env messaging.IncomingEnvelope
 		}
 		if seen {
 			res = ResolveResult{Duplicate: true}
+			return nil
+		}
+
+		// Round 33/Q33.1: a lookup for an email suppressed by a prior erasure is HELD,
+		// not resolved — never minted, never replied, but never silently dropped either
+		// (durably recorded + the inbox marked so a redelivery dedupes normally next
+		// time). data.Email is already normalized by consumer.go's processLookup before
+		// Resolve is ever called (Round 31 precedent) — do not re-normalize here.
+		emailHash := domain.HashEmail(data.Email)
+		suppressed, err := r.IsEmailSuppressed(ctx, tx, emailHash)
+		if err != nil {
+			return err
+		}
+		if suppressed {
+			if err := r.RecordHeld(ctx, tx, data.RequestID, emailHash, env.OccurredAt, now); err != nil {
+				return err
+			}
+			if err := gopdb.InboxMarkSeen(ctx, tx, env.ID, env.Type, now); err != nil {
+				return err
+			}
+			res = ResolveResult{Held: true}
 			return nil
 		}
 

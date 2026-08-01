@@ -29,6 +29,7 @@ type ResolveResult struct {
 	MasterID  string // the canonical id resolved (minted or reused)
 	Minted    bool   // true if a new id was minted (false = reused an existing one)
 	Duplicate bool   // true if the envelope id was already processed (inbox dedupe no-op)
+	Held      bool   // true if the email is suppressed by a prior erasure (AC2) — never minted, never replied
 }
 
 // Resolver runs the atomic consume-side operation: inbox-dedupe → resolve-or-mint →
@@ -164,6 +165,14 @@ func (h *Handler) processLookup(ctx context.Context, d messaging.Delivery, env m
 	h.ack(d)
 	if result.Duplicate {
 		h.Log.Debug("duplicate identity.lookup_requested ignored (idempotent inbox)", "eventId", env.ID)
+		return
+	}
+	if result.Held {
+		// AC2 (Round 33/Q33.1): the email is suppressed by a prior erasure — held +
+		// durably persisted + flagged, exactly Story 2.5's alert-log convention for its
+		// own held-and-flagged exception. Never mint, never reply: no Notify.
+		h.Log.Error("identity.lookup_requested held: email suppressed by prior erasure (never re-minted)",
+			"alert", "erased_email_lookup_held", "eventId", env.ID, "correlationId", env.CorrelationID)
 		return
 	}
 	if h.Notify != nil {

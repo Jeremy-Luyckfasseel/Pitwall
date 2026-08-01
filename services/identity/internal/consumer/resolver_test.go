@@ -46,6 +46,11 @@ func newResolver(t *testing.T) (*sql.DB, *consumer.TxResolver, *counter) {
 		Now:         func() string { return "2026-06-15T09:14:02.200Z" },
 		Source:      "identity",
 		ResolvedKey: messaging.ResolvedRoutingKey,
+		// Nothing is suppressed by default — tests that exercise the erasure gate wire
+		// their own IsEmailSuppressed/RecordHeld against the real stores
+		// (resolver_erasure_test.go's newResolverWithErasure).
+		IsEmailSuppressed: func(context.Context, *sql.Tx, string) (bool, error) { return false, nil },
+		RecordHeld:        func(context.Context, *sql.Tx, string, string, string, string) error { return nil },
 	}
 	return db, r, mint
 }
