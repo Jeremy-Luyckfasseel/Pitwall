@@ -31,9 +31,18 @@ The `masterId` is embedded into the **QR code** issued to the user, so Timing re
 directly at the gate.
 
 ## Events
-**Publishes** (`identity.events`): `identity.resolved`.
+**Publishes** (`identity.events`): `identity.resolved`, `privacy.erased`.
 **Consumes**: `identity.lookup_requested` (from Frontend registration, the
-walk-in kiosk/counter, etc.).
+walk-in kiosk/counter, etc.), `privacy.erasure_requested` (from Frontend, ADR-0009).
+
+## Erasure (Story 2.6, DG-3/DG-7)
+A validated `privacy.erasure_requested {masterId}` deletes Identity's local slice (the
+`identities` row), records a tombstone (`identity_tombstones`), and atomically enqueues
+`privacy.erased {masterId, service:"identity", mode:"deleted"}`. Because Identity's own
+slice IS the email↔`masterId` mapping, the erased email's normalized form is additionally
+hashed (irreversible SHA-256) into a suppression record (`email_suppressions`, Round
+33/Q33.1) so a later lookup for the same address is recognized and **held** rather than
+silently minting a fresh identity — see the sad-path table below.
 
 ## Key flows
 - **Online registration**: Frontend stores credentials locally, publishes
@@ -50,3 +59,6 @@ walk-in kiosk/counter, etc.).
 | RabbitMQ down | Lookups queue; replies emitted via outbox when the bus recovers. Requesters wait on the reply event (their flow is async). |
 | Malformed lookup (no/invalid email) | Validate against contract → log + dead-letter; emit no resolution. Requester's sad path handles the timeout. |
 | Service restart | Stateless beyond its store; replays unprocessed lookups; the issued-id registry is durable. |
+| Erasure request for a live `masterId` | Delete + tombstone + `privacy.erased` ack, atomic (Story 2.6). |
+| Lookup for an email suppressed by a prior erasure | Held + durably persisted + logged at alert severity; never minted, never replied (Round 33/Q33.1). |
+| A second erasure request for an already-erased `masterId` | Graceful no-op delete (idempotent); a harmless duplicate `privacy.erased` ack. |
