@@ -84,6 +84,12 @@ services:
       # transponder (rest via QR), and Timing's FIRST inbound consumer (identity.resolved)
       # DLQ policy (Story 1.9, Q&A Round 27). Defaults keep the bare `compose config` valid.
       SIM_TRANSPONDERS: ${SIM_TRANSPONDERS:-2}
+      # Register-first enforcement + the unknown-token operator exception (Story 2.5,
+      # FR39): how many synthetic "stray" (unbound-transponder) crossings the simulator
+      # injects per session — held + persisted + flagged, never counted, never minted.
+      # Defaults to 1 so a bare `compose up` visibly exercises the exception; the
+      # code-level default (unset) stays 0 (no behavior change).
+      SIM_UNKNOWN_TOKEN_SCANS: ${SIM_UNKNOWN_TOKEN_SCANS:-1}
       CONSUME_PREFETCH: ${CONSUME_PREFETCH:-16}
       DLQ_MAX_ATTEMPTS: ${DLQ_MAX_ATTEMPTS:-5}
       DLQ_RETRY_BASE_MS: ${DLQ_RETRY_BASE_MS:-1000}

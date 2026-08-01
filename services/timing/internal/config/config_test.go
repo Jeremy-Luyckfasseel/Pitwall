@@ -99,6 +99,53 @@ func TestLoad_RejectsNonPositiveInterval(t *testing.T) {
 	}
 }
 
+// simulatorEnv returns a valid env with the simulator on and all its required
+// data-shaping knobs set (Story 1.5 AC2) — the baseline for SIM_UNKNOWN_TOKEN_SCANS
+// tests (Story 2.5).
+func simulatorEnv() map[string]string {
+	env := validEnv()
+	env["SIMULATOR_ENABLED"] = "true"
+	env["SIM_DRIVERS"] = "4"
+	env["SIM_LAP_MEAN_MS"] = "45000"
+	env["SIM_LAP_STDDEV_MS"] = "2000"
+	env["SIM_SESSION_LAPS"] = "5"
+	env["MIN_LAP_TIME_MS"] = "10000"
+	return env
+}
+
+// Story 2.5: SIM_UNKNOWN_TOKEN_SCANS defaults to 0 (no behavior change) when unset.
+func TestLoad_UnknownTokenScansDefaultsToZero(t *testing.T) {
+	cfg, err := Load(envFrom(simulatorEnv()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.UnknownTokenScans != 0 {
+		t.Errorf("UnknownTokenScans default = %d, want 0", cfg.UnknownTokenScans)
+	}
+}
+
+// Story 2.5: SIM_UNKNOWN_TOKEN_SCANS is overridable.
+func TestLoad_UnknownTokenScansOverride(t *testing.T) {
+	env := simulatorEnv()
+	env["SIM_UNKNOWN_TOKEN_SCANS"] = "3"
+	cfg, err := Load(envFrom(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.UnknownTokenScans != 3 {
+		t.Errorf("UnknownTokenScans = %d, want 3", cfg.UnknownTokenScans)
+	}
+}
+
+// Story 2.5: a negative SIM_UNKNOWN_TOKEN_SCANS is rejected (fail fast, never assumed).
+func TestLoad_RejectsNegativeUnknownTokenScans(t *testing.T) {
+	env := simulatorEnv()
+	env["SIM_UNKNOWN_TOKEN_SCANS"] = "-1"
+	if _, err := Load(envFrom(env)); err == nil {
+		t.Fatal("expected an error for a negative SIM_UNKNOWN_TOKEN_SCANS")
+	}
+}
+
 // AC2: the password must never appear in a log-safe representation. The AMQP URI
 // carries it, so the URI itself must be treated as a secret — this test documents
 // that the password lives ONLY in the URI and pins that we never expose a helper

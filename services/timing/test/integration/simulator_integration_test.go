@@ -9,6 +9,7 @@ package integration
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -126,6 +127,133 @@ func TestSimulatorStreamsValidSessionThroughOutbox(t *testing.T) {
 			}
 		case <-deadline:
 			t.Fatalf("did not observe a full session in time; saw %d events: %v", len(types), types)
+		}
+	}
+}
+
+// Story 2.5 (AC1/AC2), end-to-end: with UnknownTokenScans on, a real broker + a real
+// on-disk HeldLineScanStore see the held scan land durably in held_line_scans AND no
+// stray lap.recorded for that token ever reaches the bus — proving the full wiring
+// (config -> simulator -> persistence), not just the unit-level gate.
+func TestSimulatorHeldScanPersistedAndNeverEmittedAsLap(t *testing.T) {
+	const drivers, laps = 2, 3
+	amqpURL := startBroker(t)
+	store, db, closeDB := openStore(t, filepath.Join(t.TempDir(), "timing.db"))
+	defer closeDB()
+	heldStore := persistence.NewHeldLineScanStore(db)
+
+	deliveries, closeConsumer := bindConsumerAll(t, amqpURL)
+	defer closeConsumer()
+
+	pub, confirmCh := dialConfirm(t, amqpURL)
+	defer pub.Close()
+	defer confirmCh.Close()
+
+	r := relay.New(relay.Config{
+		Store:    store,
+		Validate: validatorFor(t),
+		Publish:  confirmCh.PublishConfirmed,
+		Interval: 50 * time.Millisecond,
+		Log:      logging.New(testWriter{t}, "timing", itCorrelationID, "error"),
+	})
+	enqueue := relay.NewEnqueuer(db, store, validatorFor(t), r)
+
+	sim := simulator.New(simulator.Config{
+		Drivers:           drivers,
+		LapMeanMs:         45000,
+		LapStddevMs:       2000,
+		SessionLaps:       laps,
+		MinLapTimeMs:      10000,
+		Tick:              0,
+		SessionGap:        time.Hour,
+		Source:            "timing",
+		Rng:               rand.New(rand.NewSource(21)),
+		Now:               time.Now,
+		Enqueue:           enqueue,
+		Resolve:           fakeResolveID,
+		UnknownTokenScans: 1,
+		RecordHeldScan: func(ctx context.Context, token, method, sessionID, occurredAt, reason string) error {
+			return heldStore.Record(ctx, token, method, sessionID, occurredAt, reason, messaging.FormatWireTime(time.Now()))
+		},
+		Log: logging.New(testWriter{t}, "timing", itCorrelationID, "error"),
+	})
+
+	relayCtx, stopRelay := context.WithCancel(context.Background())
+	defer stopRelay()
+	simCtx, stopSim := context.WithCancel(context.Background())
+	defer stopSim()
+	go func() { _ = r.Run(relayCtx) }()
+	go func() { _ = sim.Run(simCtx) }()
+
+	validate := validatorFor(t)
+	wantLaps := drivers * laps
+	gotLaps := 0
+	var lapMasterIDs []string
+	deadline := time.After(30 * time.Second)
+	for {
+		select {
+		case d := <-deliveries:
+			// IncomingEnvelope (Data kept raw) — this test needs the typed lap payload,
+			// unlike the sibling test above which only inspects env.Type.
+			env, err := messaging.DecodeIncoming(d.Body)
+			if err != nil {
+				t.Fatalf("delivery not a valid envelope: %v", err)
+			}
+			if err := validate(d.Body); err != nil {
+				t.Fatalf("event %q off the bus failed /contract validation: %v", env.Type, err)
+			}
+			if env.Type == messaging.LapRecordedRoutingKey {
+				gotLaps++
+				var data messaging.LapRecordedData
+				if err := json.Unmarshal(env.Data, &data); err != nil {
+					t.Fatalf("lap.recorded data: %v", err)
+				}
+				lapMasterIDs = append(lapMasterIDs, data.MasterID)
+			}
+			if env.Type == messaging.SessionEndedRoutingKey {
+				stopSim()
+				if gotLaps != wantLaps {
+					t.Fatalf("lap.recorded count = %d, want %d (the stray must never be counted)", gotLaps, wantLaps)
+				}
+				assertAllSentEventually(t, store)
+				stopRelay()
+				assertHeldScanPersisted(t, db, lapMasterIDs)
+				return
+			}
+		case <-deadline:
+			t.Fatalf("did not observe a full session in time; saw %d laps", gotLaps)
+		}
+	}
+}
+
+// assertHeldScanPersisted polls held_line_scans until a row lands, then checks it is
+// well-formed and that its token never appears among the observed lap.recorded masterIds.
+func assertHeldScanPersisted(t *testing.T, db *sql.DB, lapMasterIDs []string) {
+	t.Helper()
+	deadline := time.After(10 * time.Second)
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		var token, method, reason string
+		err := db.QueryRow(`SELECT token, method, reason FROM held_line_scans LIMIT 1`).Scan(&token, &method, &reason)
+		if err == nil {
+			if method != messaging.CheckInMethodTransponder {
+				t.Errorf("held scan method = %q, want %q", method, messaging.CheckInMethodTransponder)
+			}
+			if reason == "" {
+				t.Error("held scan reason is empty")
+			}
+			for _, id := range lapMasterIDs {
+				if id == token {
+					t.Errorf("held token %q was ALSO emitted as a lap.recorded masterId — must never be counted", token)
+				}
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("no row landed in held_line_scans in time: %v", err)
+		case <-tick.C:
 		}
 	}
 }

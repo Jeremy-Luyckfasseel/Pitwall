@@ -74,6 +74,21 @@ here is **extracted** to `libs/go-pitwall` in Epic 2 (grow-don't-pre-scaffold).
 > reassignment at warn with the previous `masterId`). Entirely Timing-internal — no new
 > bus event (Q&A Round 6/Q6.3, Round 32).
 >
+> **Register-first enforcement + the unknown-token operator exception (Story 2.5, FR39).**
+> Within the simulator (the only crossing source through Epic 2 — no real hardware
+> line-scanner exists yet), every start-finish crossing is gated on a per-session
+> checked-in registry (built from the drivers `Prepare` register-first-resolved) before
+> it can reach a `LapTracker` — a token with no completed check-in this session is never
+> counted, never minted an id,
+> never emitted as an anonymous lap. It is **held**: durably recorded in the local
+> `held_line_scans` table (`HeldLineScanStore`, append-only — a future operator
+> late-binding capability would add its own read/update API) and **flagged** with an
+> alert-severity log (`"alert":"unknown_token_at_line"`, same convention as the DLQ
+> parking log) — Control Room does not exist yet (Epic 12) to consume a bus alert event,
+> so the structured log is the load-bearing signal today. `SIM_UNKNOWN_TOKEN_SCANS`
+> injects synthetic stray (unbound-transponder) crossings per session so this exception
+> path is exercised by a real trigger, not just a unit test.
+>
 > The producer seam is `relay.NewEnqueuer(db, store, validate, relay)` (commits the
 > outbox row in its own tx, then kicks the relay). The **consumer-side session gating /
 > out-of-order tolerance** (Story 1.8) lives in `services/leaderboard`; the **event
@@ -144,6 +159,7 @@ go test -tags=integration ./test/integration/...# real RabbitMQ via testcontaine
 | `SIM_SESSION_GAP_MS` | `5000` | pause between sessions in the continuous loop |
 | `SIM_SEED` | *(time-seeded)* | optional integer for a reproducible session |
 | `SIM_TRANSPONDERS` | `0` | how many sim drivers check in via a transponder (rest QR); `0..SIM_DRIVERS` (Story 2.3) |
+| `SIM_UNKNOWN_TOKEN_SCANS` | `0` | stray unbound-transponder crossings injected per session; held + persisted + flagged, never counted/minted (Story 2.5, FR39) |
 | `CONSUME_PREFETCH` | `16` | QoS for the `identity.resolved` consumer (> 0) |
 | `DLQ_MAX_ATTEMPTS` | `5` | consumer DLQ: processing attempts before parking (Q&A Round 27) |
 | `DLQ_RETRY_BASE_MS` | `1000` | consumer DLQ: first retry-hop backoff (ms) |
@@ -166,11 +182,13 @@ internal/messaging/          # FACADE over libs/go-pitwall/messaging: Timing's e
                              #   constants + domain-event builders/types (the envelope codec,
                              #   validator, publisher live in the lib — Story 2.1)
 internal/persistence/        # FACADE over libs/go-pitwall/persistence: Timing's migrations (outbox
-                             #   table DDL) + Open wiring (db/outbox mechanics live in the lib)
+                             #   table DDL, transponder_map, held_line_scans) + Open wiring (db/outbox
+                             #   mechanics live in the lib); TransponderStore (2.3/2.4) + HeldLineScanStore (2.5)
 internal/relay/              # FACADE over libs/go-pitwall/relay (outbox relay + producer seam)
 internal/domain/             # pure crossing -> lap rule (start marker, per-driver delta/lapNumber, min-lap filter)
 internal/consumer/           # identity.resolved consumer (Handler + DLQ) + the register-first Resolver bridge (Story 2.3)
-internal/simulator/          # the env-toggled simulator: register-first resolve, gate check-ins, distribution, session lifecycle
+internal/simulator/          # the env-toggled simulator: register-first resolve, gate check-ins, distribution,
+                             #   session lifecycle, the register-first gate + unknown-token exception (Story 2.5)
 internal/heartbeat/          # FACADE over libs/go-pitwall/heartbeat (1 s emitter + liveness touch-file)
 internal/hygiene/            # source guard test (no bare prints)
 # Shared blueprint mechanics (logger, envelope+validator, outbox/inbox, messaging

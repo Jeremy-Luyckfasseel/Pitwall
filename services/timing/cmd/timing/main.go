@@ -127,6 +127,7 @@ func run() int {
 	)
 	if cfg.SimulatorEnabled {
 		tpStore := persistence.NewTransponderStore(db)
+		heldStore := persistence.NewHeldLineScanStore(db)
 
 		lookupPub, err = messaging.Dial(cfg.AMQPURI(), messaging.FrontendEventsExchange)
 		if err != nil {
@@ -195,11 +196,15 @@ func run() int {
 			AssignTransponder: func(ctx context.Context, transponderID, masterID string) (bool, string, error) {
 				return tpStore.Assign(ctx, transponderID, masterID, messaging.FormatWireTime(time.Now()))
 			},
+			UnknownTokenScans: cfg.UnknownTokenScans,
+			RecordHeldScan: func(ctx context.Context, token, method, sessionID, occurredAt, reason string) error {
+				return heldStore.Record(ctx, token, method, sessionID, occurredAt, reason, messaging.FormatWireTime(time.Now()))
+			},
 			Log: log,
 		})
 		log.Info("simulator enabled (register-first)", "drivers", cfg.SimDrivers, "transponders", cfg.SimTransponders,
 			"sessionLaps", cfg.SimSessionLaps, "lapMeanMs", cfg.SimLapMeanMs, "lapStddevMs", cfg.SimLapStddevMs,
-			"minLapTimeMs", cfg.MinLapTimeMs)
+			"minLapTimeMs", cfg.MinLapTimeMs, "unknownTokenScans", cfg.UnknownTokenScans)
 	}
 
 	// Run until SIGTERM/SIGINT.
