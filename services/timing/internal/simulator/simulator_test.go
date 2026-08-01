@@ -3,6 +3,7 @@ package simulator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log/slog"
@@ -92,6 +93,9 @@ func testConfig(rng *rand.Rand) Config {
 		AssignTransponder: func(context.Context, string, string) (bool, string, error) {
 			return false, "", nil
 		},
+		RecordHeldScan: func(context.Context, string, string, string, string, string) error {
+			return nil
+		},
 	}
 }
 
@@ -124,7 +128,10 @@ func prepared(t *testing.T, cfg Config) *Simulator {
 func TestGenerateSession_CoherentValidatedStream(t *testing.T) {
 	v := validatorForTest(t)
 	s := prepared(t, testConfig(rand.New(rand.NewSource(1))))
-	evs := s.GenerateSession(s.now())
+	evs, held := s.GenerateSession(s.now())
+	if len(held) != 0 {
+		t.Fatalf("held scans = %d, want 0 (UnknownTokenScans defaults to 0)", len(held))
+	}
 
 	if evs[0].Type != messaging.SessionStartedRoutingKey {
 		t.Errorf("first event = %q, want session.started", evs[0].Type)
@@ -207,7 +214,7 @@ func TestPrepareAndGenerate_TransponderDriverCheckedInAndAssigned(t *testing.T) 
 	}
 
 	s := prepared(t, cfg)
-	evs := s.GenerateSession(s.now())
+	evs, _ := s.GenerateSession(s.now())
 
 	if len(seeds) != 1 {
 		t.Fatalf("expected exactly 1 transponder mapping seeded, got %d", len(seeds))
@@ -253,11 +260,11 @@ func TestGenerateSession_FilterActiveLeavesCleanStreamUnchanged(t *testing.T) {
 
 	off := testConfig(rand.New(rand.NewSource(11)))
 	off.MinLapTimeMs = 0
-	a := prepared(t, off).GenerateSession(base)
+	a, _ := prepared(t, off).GenerateSession(base)
 
 	on := testConfig(rand.New(rand.NewSource(11)))
 	on.MinLapTimeMs = 10000
-	b := prepared(t, on).GenerateSession(base)
+	b, _ := prepared(t, on).GenerateSession(base)
 
 	if len(a) != len(b) {
 		t.Fatalf("filter changed the stream length: off=%d on=%d", len(a), len(b))
@@ -276,8 +283,8 @@ func TestGenerateSession_FilterActiveLeavesCleanStreamUnchanged(t *testing.T) {
 // Same seed + same base time -> identical data (reproducible demos/tests).
 func TestGenerateSession_DeterministicUnderSeed(t *testing.T) {
 	base := time.Date(2026, 6, 5, 14, 0, 0, 0, time.UTC)
-	a := prepared(t, testConfig(rand.New(rand.NewSource(7)))).GenerateSession(base)
-	b := prepared(t, testConfig(rand.New(rand.NewSource(7)))).GenerateSession(base)
+	a, _ := prepared(t, testConfig(rand.New(rand.NewSource(7)))).GenerateSession(base)
+	b, _ := prepared(t, testConfig(rand.New(rand.NewSource(7)))).GenerateSession(base)
 	if len(a) != len(b) {
 		t.Fatalf("different lengths %d vs %d under same seed", len(a), len(b))
 	}
@@ -287,6 +294,93 @@ func TestGenerateSession_DeterministicUnderSeed(t *testing.T) {
 		}
 		if !reflect.DeepEqual(a[i].Data, b[i].Data) {
 			t.Errorf("event %d data differs under same seed", i)
+		}
+	}
+}
+
+// Story 2.5, AC1 (regression guard): the default UnknownTokenScans=0 produces ZERO
+// held scans and leaves the envelope stream byte-identical to pre-2.5 behavior — the
+// register-first gate must not change anything when there is nothing to hold.
+func TestGenerateSession_UnknownTokenScansZero_NoHeldScans(t *testing.T) {
+	base := time.Date(2026, 6, 5, 14, 0, 0, 0, time.UTC)
+	cfg := testConfig(rand.New(rand.NewSource(9)))
+	evs, held := prepared(t, cfg).GenerateSession(base)
+
+	if len(held) != 0 {
+		t.Fatalf("held scans = %d, want 0 (UnknownTokenScans defaults to 0)", len(held))
+	}
+	wantLaps := cfg.Drivers * cfg.SessionLaps
+	lapCount := 0
+	for _, e := range evs {
+		if e.Type == messaging.LapRecordedRoutingKey {
+			lapCount++
+		}
+	}
+	if lapCount != wantLaps {
+		t.Errorf("lap.recorded count = %d, want %d (drivers*laps, unchanged)", lapCount, wantLaps)
+	}
+}
+
+// Story 2.5, AC1/AC2: a token with no completed check-in this session (a stray
+// transponder) is HELD, not counted — it never reaches a LapTracker, never produces a
+// lap.recorded, and is reported back for the caller (Run) to persist + flag. Real
+// drivers' laps are unaffected (no cross-contamination between the gate and the
+// existing min-lap-time filter).
+func TestGenerateSession_UnknownTokenScans_HeldNotCounted(t *testing.T) {
+	base := time.Date(2026, 6, 5, 14, 0, 0, 0, time.UTC)
+
+	baseline := testConfig(rand.New(rand.NewSource(9)))
+	baselineEvs, _ := prepared(t, baseline).GenerateSession(base)
+
+	cfg := testConfig(rand.New(rand.NewSource(9)))
+	cfg.UnknownTokenScans = 1
+	evs, held := prepared(t, cfg).GenerateSession(base)
+
+	if len(held) != 1 {
+		t.Fatalf("held scans = %d, want 1", len(held))
+	}
+	h := held[0]
+	if h.Token == "" {
+		t.Error("held scan Token is empty")
+	}
+	if h.Method != messaging.CheckInMethodTransponder {
+		t.Errorf("held scan Method = %q, want %q", h.Method, messaging.CheckInMethodTransponder)
+	}
+	if h.SessionID == "" {
+		t.Error("held scan SessionID is empty")
+	}
+	if h.Reason == "" {
+		t.Error("held scan Reason is empty")
+	}
+	if h.At.IsZero() {
+		t.Error("held scan At is zero")
+	}
+
+	for _, e := range evs {
+		if e.Type != messaging.LapRecordedRoutingKey {
+			continue
+		}
+		d := e.Data.(messaging.LapRecordedData)
+		if d.MasterID == h.Token {
+			t.Errorf("lap.recorded emitted for the held/stray token %q — must never be counted", h.Token)
+		}
+	}
+
+	// Real drivers' events are unaffected by the injected stray (no cross-contamination).
+	realOnly := make([]messaging.Envelope, 0, len(evs))
+	for _, e := range evs {
+		if e.Type == messaging.LapRecordedRoutingKey && e.Data.(messaging.LapRecordedData).MasterID == h.Token {
+			continue
+		}
+		realOnly = append(realOnly, e)
+	}
+	if len(realOnly) != len(baselineEvs) {
+		t.Fatalf("real-driver event count = %d, want %d (baseline, unaffected by the stray)", len(realOnly), len(baselineEvs))
+	}
+	for i := range realOnly {
+		if realOnly[i].Type != baselineEvs[i].Type || realOnly[i].OccurredAt != baselineEvs[i].OccurredAt {
+			t.Errorf("event %d differs from baseline: %q@%s vs %q@%s",
+				i, realOnly[i].Type, realOnly[i].OccurredAt, baselineEvs[i].Type, baselineEvs[i].OccurredAt)
 		}
 	}
 }
@@ -312,6 +406,93 @@ func TestRun_EmitsSessionAndStopsOnCancel(t *testing.T) {
 	}
 	if got[len(got)-1].Type != messaging.SessionEndedRoutingKey {
 		t.Errorf("expected session.ended last, got %q", got[len(got)-1].Type)
+	}
+}
+
+// Story 2.5 (AC2): a held scan is persisted via RecordHeldScan and logged at alert
+// severity exactly once per UnknownTokenScans.
+func TestRun_HeldScanRecordedAndLogged(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	logs := &logCapture{}
+	var recorded []string
+	cfg := testConfig(rand.New(rand.NewSource(13)))
+	cfg.UnknownTokenScans = 1
+	cfg.Log = slog.New(logs)
+	cfg.RecordHeldScan = func(_ context.Context, token, method, sessionID, occurredAt, reason string) error {
+		recorded = append(recorded, token)
+		return nil
+	}
+	cfg.Enqueue = func(_ context.Context, e messaging.Envelope) error {
+		if e.Type == messaging.SessionEndedRoutingKey {
+			cancel()
+		}
+		return nil
+	}
+	if err := New(cfg).Run(ctx); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("RecordHeldScan calls = %d, want 1", len(recorded))
+	}
+	rec, ok := logs.find("unknown token at line — held for operator late-binding")
+	if !ok {
+		t.Fatalf("expected the unknown-token alert log line, got %+v", logs.records)
+	}
+	if rec.level != slog.LevelError {
+		t.Errorf("held-scan log level = %v, want Error (alert severity)", rec.level)
+	}
+	if rec.attrs["alert"] != "unknown_token_at_line" {
+		t.Errorf("held-scan log alert attr = %q, want %q", rec.attrs["alert"], "unknown_token_at_line")
+	}
+	if rec.attrs["token"] != recorded[0] {
+		t.Errorf("held-scan log token = %q, want %q", rec.attrs["token"], recorded[0])
+	}
+}
+
+// Story 2.5 (AC1 regression guard): the default UnknownTokenScans=0 neither records nor
+// logs a held scan.
+func TestRun_NoHeldScanByDefault(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	logs := &logCapture{}
+	var recordCalls int
+	cfg := testConfig(rand.New(rand.NewSource(14)))
+	cfg.Log = slog.New(logs)
+	cfg.RecordHeldScan = func(context.Context, string, string, string, string, string) error {
+		recordCalls++
+		return nil
+	}
+	cfg.Enqueue = func(_ context.Context, e messaging.Envelope) error {
+		if e.Type == messaging.SessionEndedRoutingKey {
+			cancel()
+		}
+		return nil
+	}
+	if err := New(cfg).Run(ctx); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if recordCalls != 0 {
+		t.Errorf("RecordHeldScan calls = %d, want 0", recordCalls)
+	}
+	if _, ok := logs.find("unknown token at line — held for operator late-binding"); ok {
+		t.Errorf("unexpected unknown-token alert log with UnknownTokenScans=0")
+	}
+}
+
+// Story 2.5 (AC2 "never dropped"): a RecordHeldScan failure is fatal to Run — the same
+// escalation tier as an Enqueue failure — so a held scan is never silently lost.
+func TestRun_RecordHeldScanErrorIsFatal(t *testing.T) {
+	cfg := testConfig(rand.New(rand.NewSource(15)))
+	cfg.UnknownTokenScans = 1
+	wantErr := errors.New("db closed")
+	cfg.RecordHeldScan = func(context.Context, string, string, string, string, string) error {
+		return wantErr
+	}
+	err := New(cfg).Run(context.Background())
+	if err == nil {
+		t.Fatal("Run returned nil error, want a fatal error from RecordHeldScan")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("Run error = %v, want it to wrap %v", err, wantErr)
 	}
 }
 

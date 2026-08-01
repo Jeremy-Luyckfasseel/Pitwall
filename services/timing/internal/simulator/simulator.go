@@ -61,7 +61,29 @@ type Config struct {
 	// simulator calls it standing in for counter/kiosk staff (no Bar/POS or Frontend
 	// Admin hand-out surface exists yet); a future real surface calls the same trigger.
 	AssignTransponder func(ctx context.Context, transponderID, masterID string) (reassigned bool, previousMasterID string, err error)
-	Log               *slog.Logger
+	// UnknownTokenScans injects this many synthetic "stray" line-crossings per session
+	// from a token that never completed check-in (Story 2.5, FR39: the register-first/
+	// unknown-token operator exception). >= 0; 0 (default) injects none — no behavior
+	// change from pre-2.5. Required only when > 0: RecordHeldScan must be set.
+	UnknownTokenScans int
+	// RecordHeldScan durably persists a held line scan — a crossing whose token had no
+	// completed check-in this session (Story 2.5, FR39). It is never dropped: a
+	// RecordHeldScan error is fatal to Run, the same escalation tier as an Enqueue
+	// failure. Required only when UnknownTokenScans > 0.
+	RecordHeldScan func(ctx context.Context, token, method, sessionID, occurredAt, reason string) error
+	Log            *slog.Logger
+}
+
+// HeldScan is a line-crossing whose token had no completed check-in this session — the
+// register-first/unknown-token operator exception (FR39, Story 2.5). It is never fed to
+// a LapTracker and never becomes a lap.recorded; Run persists it via RecordHeldScan and
+// logs it at alert severity.
+type HeldScan struct {
+	Token     string
+	Method    string
+	SessionID string
+	Reason    string
+	At        time.Time
 }
 
 // driver is one simulated racer. masterID is empty until Prepare resolves it.
@@ -166,7 +188,19 @@ func (s *Simulator) Run(ctx context.Context) error {
 			s.logInfo("simulator stopped")
 			return nil
 		}
-		session := s.GenerateSession(s.now())
+		session, held := s.GenerateSession(s.now())
+		for _, h := range held {
+			occurredAt := messaging.FormatWireTime(h.At)
+			if err := s.cfg.RecordHeldScan(ctx, h.Token, h.Method, h.SessionID, occurredAt, h.Reason); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return fmt.Errorf("simulator record held scan %s: %w", h.Token, err)
+			}
+			s.logAlert("unknown token at line — held for operator late-binding",
+				"alert", "unknown_token_at_line", "token", h.Token, "method", h.Method,
+				"sessionId", h.SessionID, "reason", h.Reason)
+		}
 		for _, env := range session {
 			if err := s.cfg.Enqueue(ctx, env); err != nil {
 				if ctx.Err() != nil {
@@ -187,9 +221,12 @@ func (s *Simulator) Run(ctx context.Context) error {
 // GenerateSession produces one complete session's events in time order: session.started,
 // one driver.checked_in per driver at the gate, then one lap.recorded per counted lap
 // across all drivers (interleaved by crossing time), then session.ended with a per-driver
-// summary. Pure and deterministic given the base time, the RNG state, and the resolved
-// driver masterIds (set by Prepare) — no I/O.
-func (s *Simulator) GenerateSession(base time.Time) []messaging.Envelope {
+// summary — plus any held scans (Story 2.5, FR39): synthetic "stray" crossings from a
+// token that never completed check-in this session (Config.UnknownTokenScans), which are
+// never fed to a LapTracker and never produce a lap.recorded. Pure and deterministic
+// given the base time, the RNG state, and the resolved driver masterIds (set by
+// Prepare) — no I/O (Run persists/logs the held scans it gets back).
+func (s *Simulator) GenerateSession(base time.Time) ([]messaging.Envelope, []HeldScan) {
 	sessionID := "sim-" + base.UTC().Format("20060102T150405.000Z")
 	correlationID := uuid.Must(uuid.NewV7()).String()
 
@@ -212,16 +249,46 @@ func (s *Simulator) GenerateSession(base time.Time) []messaging.Envelope {
 	// marker); SessionLaps more crossings follow, each a drawn lap time later.
 	type crossing struct {
 		driver string
+		method string
 		at     time.Time
 	}
 	var crossings []crossing
+	maxOffsetMs := 0
+	// checkedIn is the register-first registry (FR39): only a token that completed gate
+	// check-in this session (i.e. one of s.drivers) may reach a LapTracker. The simulator
+	// already knows this in-memory (it resolved every driver in Prepare) — it needs no
+	// store lookup to know who it registered, the same reasoning Story 2.4 used for why
+	// per-lap attribution needs no new code.
+	checkedIn := make(map[string]bool, len(s.drivers))
 	for _, d := range s.drivers {
+		checkedIn[d.masterID] = true
 		offsetMs := s.cfg.Rng.Intn(1000) // stagger out-laps slightly per driver
-		crossings = append(crossings, crossing{driver: d.masterID, at: base.Add(time.Duration(offsetMs) * time.Millisecond)})
+		crossings = append(crossings, crossing{driver: d.masterID, method: d.method, at: base.Add(time.Duration(offsetMs) * time.Millisecond)})
 		for lap := 0; lap < s.cfg.SessionLaps; lap++ {
 			offsetMs += s.drawLapMs()
-			crossings = append(crossings, crossing{driver: d.masterID, at: base.Add(time.Duration(offsetMs) * time.Millisecond)})
+			crossings = append(crossings, crossing{driver: d.masterID, method: d.method, at: base.Add(time.Duration(offsetMs) * time.Millisecond)})
 		}
+		if offsetMs > maxOffsetMs {
+			maxOffsetMs = offsetMs
+		}
+	}
+
+	// Inject UnknownTokenScans synthetic strays (Story 2.5, FR39): a token that never
+	// completed check-in this session (obviously not a driver's masterId — nothing ever
+	// mints an id for it). Modeled as an unbound/returned transponder, the realistic
+	// unknown-token case (a QR literally carries an already-resolved masterId, FR32, so
+	// it has no separate "unresolved" state to inject).
+	for i := 0; i < s.cfg.UnknownTokenScans; i++ {
+		token := fmt.Sprintf("TP-STRAY-%d", i+1)
+		offsetMs := 0
+		if maxOffsetMs > 0 {
+			offsetMs = s.cfg.Rng.Intn(maxOffsetMs)
+		}
+		crossings = append(crossings, crossing{
+			driver: token,
+			method: messaging.CheckInMethodTransponder,
+			at:     base.Add(time.Duration(offsetMs) * time.Millisecond),
+		})
 	}
 
 	// Emit in global time order (realistic: events arrive as drivers cross).
@@ -238,8 +305,19 @@ func (s *Simulator) GenerateSession(base time.Time) []messaging.Envelope {
 	}
 	summaryByDriver := map[string]*agg{}
 	var lastAt time.Time = base
+	var held []HeldScan
 
 	for _, c := range crossings {
+		if !checkedIn[c.driver] {
+			// Register-first gate (AC1/AC2): a token with no completed check-in this
+			// session never reaches a LapTracker and never produces a lap.recorded — it
+			// is held for the caller (Run) to persist + flag, never minted, never dropped.
+			held = append(held, HeldScan{
+				Token: c.driver, Method: c.method, SessionID: sessionID,
+				Reason: "no completed check-in this session", At: c.at,
+			})
+			continue
+		}
 		lap, outcome := trackers[c.driver].Cross(c.at)
 		if outcome != domain.Counted {
 			// StartMarker (out-lap) or Rejected (sub-MIN bounce): no lap emitted.
@@ -267,7 +345,7 @@ func (s *Simulator) GenerateSession(base time.Time) []messaging.Envelope {
 		}
 	}
 	out = append(out, messaging.NewSessionEndedEnvelope(s.cfg.Source, correlationID, sessionID, lastAt, summary))
-	return out
+	return out, held
 }
 
 // drawLapMs draws one lap time from the configured normal distribution, clamped to
@@ -289,6 +367,16 @@ func (s *Simulator) logInfo(msg string, args ...any) {
 func (s *Simulator) logWarn(msg string, args ...any) {
 	if s.cfg.Log != nil {
 		s.cfg.Log.Warn(msg, args...)
+	}
+}
+
+// logAlert logs at Error severity carrying an "alert" attribute — the operator-surfaced
+// exception signal, matching the DLQ-parking convention (internal/consumer's
+// "alert": "message_parked"). Control Room (Epic 12) does not exist yet to consume a bus
+// alert event, so a structured log is the load-bearing signal today (Story 2.5).
+func (s *Simulator) logAlert(msg string, args ...any) {
+	if s.cfg.Log != nil {
+		s.cfg.Log.Error(msg, args...)
 	}
 }
 
