@@ -48,6 +48,14 @@ type TombstoneWriter func(ctx context.Context, tx *sql.Tx, masterID string) erro
 // own tombstone table). Used by GuardedCreate.
 type TombstoneChecker func(ctx context.Context, masterID string) (bool, error)
 
+// AckEnqueuer durably enqueues the privacy.erased ack INSIDE the caller's transaction
+// (e.g. via libs/go-pitwall/relay.EnqueueEnvelope against the service's own outbox), so
+// the ack commits atomically with the delete + tombstone. Required — without it a crash
+// between Handle committing and an out-of-band publish would permanently lose the ack
+// (the inbox is already marked seen, so a redelivery reports Duplicate and emits
+// nothing), violating the "never silently drop" rule the whole erasure saga depends on.
+type AckEnqueuer func(ctx context.Context, tx *sql.Tx, ack messaging.Envelope) error
+
 // requestData is the tolerant-reader view of a privacy.erasure_requested payload — the
 // scaffold needs the requestId (for the ack) and the masterId (to erase).
 type requestData struct {
@@ -73,6 +81,7 @@ type Handler struct {
 	Mode      Mode             // defaults to ModeDeleted
 	Delete    SliceDeleter     // required
 	Tombstone TombstoneWriter  // required
+	Enqueue   AckEnqueuer      // required — atomic ack enqueue (see AckEnqueuer doc)
 	Now       func() time.Time // injectable clock (defaults to time.Now)
 }
 
@@ -105,6 +114,18 @@ func (h *Handler) Handle(ctx context.Context, env messaging.IncomingEnvelope) (R
 	}
 	at := messaging.FormatWireTime(now())
 
+	mode := h.Mode
+	if mode == "" {
+		mode = ModeDeleted
+	}
+	ack := messaging.NewCausedEnvelope(ErasedType, h.Service, env.CorrelationID, env.ID, at, erasedData{
+		RequestID: d.RequestID,
+		MasterID:  d.MasterID,
+		Service:   h.Service,
+		Mode:      string(mode),
+		At:        at,
+	})
+
 	var duplicate bool
 	err := persistence.WithinTx(ctx, h.DB, func(tx *sql.Tx) error {
 		seen, e := persistence.InboxHasSeen(ctx, tx, env.ID)
@@ -121,6 +142,12 @@ func (h *Handler) Handle(ctx context.Context, env messaging.IncomingEnvelope) (R
 		if e := h.Tombstone(ctx, tx, d.MasterID); e != nil {
 			return fmt.Errorf("write tombstone for %s: %w", d.MasterID, e)
 		}
+		// Enqueue the ack INSIDE this same transaction (AckEnqueuer doc) so it commits
+		// atomically with the delete + tombstone — a crash after this point either takes
+		// everything (including the durably-queued ack) or nothing.
+		if e := h.Enqueue(ctx, tx, ack); e != nil {
+			return fmt.Errorf("enqueue privacy.erased ack for %s: %w", d.MasterID, e)
+		}
 		return persistence.InboxMarkSeen(ctx, tx, env.ID, env.Type, at)
 	})
 	if err != nil {
@@ -130,17 +157,6 @@ func (h *Handler) Handle(ctx context.Context, env messaging.IncomingEnvelope) (R
 		return Result{RequestID: d.RequestID, MasterID: d.MasterID, Duplicate: true}, nil
 	}
 
-	mode := h.Mode
-	if mode == "" {
-		mode = ModeDeleted
-	}
-	ack := messaging.NewCausedEnvelope(ErasedType, h.Service, env.CorrelationID, env.ID, at, erasedData{
-		RequestID: d.RequestID,
-		MasterID:  d.MasterID,
-		Service:   h.Service,
-		Mode:      string(mode),
-		At:        at,
-	})
 	return Result{RequestID: d.RequestID, MasterID: d.MasterID, Ack: ack}, nil
 }
 
