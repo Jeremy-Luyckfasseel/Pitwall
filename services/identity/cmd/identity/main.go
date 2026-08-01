@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/google/uuid"
 
+	goperasure "github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/erasure"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/logging"
 	librelay "github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/relay"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/identity/internal/config"
@@ -79,6 +81,8 @@ func run() int {
 	}()
 	store := persistence.NewStore(db)
 	outbox := persistence.NewOutboxStore(db)
+	erasureStore := persistence.NewErasureStore()
+	heldStore := persistence.NewHeldLookupStore()
 	log.Info("database ready; migrations applied", "path", cfg.DBPath)
 
 	// Dual role (see package doc): a CONSUMER bus (binds frontend.events, publishes the
@@ -109,9 +113,9 @@ func run() int {
 		Log:      log,
 	})
 
-	// The resolve-or-mint engine: one tx per lookup (inbox-dedupe → resolve-or-mint →
-	// enqueue the identity.resolved reply → mark inbox). The reply is published by the
-	// relay above.
+	// The resolve-or-mint engine: one tx per lookup (inbox-dedupe → email-suppression
+	// gate (Story 2.6, AC2) → resolve-or-mint → enqueue the identity.resolved reply →
+	// mark inbox). The reply is published by the relay above.
 	resolver := &consumer.TxResolver{
 		DB:          db,
 		Store:       store,
@@ -120,22 +124,63 @@ func run() int {
 		MintID:      uuid.NewString, // lowercase canonical UUID v4 — the canonical masterId
 		Source:      cfg.ServiceName,
 		ResolvedKey: messaging.ResolvedRoutingKey,
+		IsEmailSuppressed: func(ctx context.Context, tx *sql.Tx, emailHash string) (bool, error) {
+			return erasureStore.IsEmailSuppressed(ctx, tx, emailHash)
+		},
+		RecordHeld: func(ctx context.Context, tx *sql.Tx, requestID, emailHash, occurredAt, recordedAt string) error {
+			return heldStore.Record(ctx, tx, requestID, emailHash, "email suppressed by prior erasure", occurredAt, recordedAt)
+		},
 	}
 
+	// The erasure engine (Story 2.6, AC1): libs/go-pitwall/erasure.Handler's reusable
+	// inbox-dedupe → delete-slice → tombstone → atomically-enqueued ack pipeline, with
+	// Identity's own delete-slice/tombstone callbacks bound to erasureStore. Delete looks
+	// up the CURRENT email before erasing it (so it can suppress the hash) — a
+	// not-found (already-erased / never-existed) masterId is a graceful no-op, never an
+	// error (idempotent double-erasure). Enqueue reuses the SAME outbox/validator as
+	// identity.resolved — one relay drains both event types.
+	erasureHandler := &goperasure.Handler{
+		DB:      db,
+		Service: cfg.ServiceName,
+		Mode:    goperasure.ModeDeleted,
+		Delete: func(ctx context.Context, tx *sql.Tx, masterID string) error {
+			email, found, err := erasureStore.LookupEmail(ctx, tx, masterID)
+			if err != nil {
+				return err
+			}
+			if !found {
+				return nil
+			}
+			hash := domain.HashEmail(domain.NormalizeEmail(email))
+			return erasureStore.DeleteSlice(ctx, tx, masterID, hash, messaging.FormatWireTime(time.Now()))
+		},
+		Tombstone: func(ctx context.Context, tx *sql.Tx, masterID string) error {
+			return erasureStore.WriteTombstone(ctx, tx, masterID, messaging.FormatWireTime(time.Now()))
+		},
+		Enqueue: func(ctx context.Context, tx *sql.Tx, ack messaging.Envelope) error {
+			return librelay.EnqueueEnvelope(tx, outbox, validator.ValidateEnvelopeBytes, ack)
+		},
+	}
+
+	// ONE queue carries both intents (they share the SAME producer exchange,
+	// frontend.events, Q30.1) — the library's own DeclareConsumerQueue doc comment
+	// states this is the intended design, so the producer's publish order is preserved.
 	consumerOpts := messaging.ConsumerOptions{
 		SourceExchange: cfg.SourceExchange, // frontend.events (the originating intent exchange)
 		QueueName:      messaging.LookupRequestedQueue,
-		RoutingKeys:    []string{messaging.LookupRequestedRoutingKey},
+		RoutingKeys:    []string{messaging.LookupRequestedRoutingKey, goperasure.ErasureRequestedType},
 		Prefetch:       cfg.ConsumePrefetch,
 		DLXExchange:    messaging.IdentityDLXExchange,
 	}
 
 	handler := &consumer.Handler{
-		Validate:  validator.ValidateEnvelopeBytes,
-		Resolver:  resolver,
-		Log:       log,
-		Notify:    outboxRelay.Kick, // a fresh reply is enqueued; publish promptly
-		LookupKey: messaging.LookupRequestedRoutingKey,
+		Validate:   validator.ValidateEnvelopeBytes,
+		Resolver:   resolver,
+		Erasure:    erasureHandler,
+		Log:        log,
+		Notify:     outboxRelay.Kick, // a fresh reply/ack is enqueued; publish promptly
+		LookupKey:  messaging.LookupRequestedRoutingKey,
+		ErasureKey: goperasure.ErasureRequestedType,
 		Policy: domain.DLQPolicy{
 			MaxAttempts: cfg.DLQMaxAttempts,
 			BaseMs:      cfg.DLQRetryBaseMs,
@@ -191,6 +236,7 @@ func run() int {
 		return 1
 	}
 	log.Info("consuming", "queue", messaging.LookupRequestedQueue, "source", cfg.SourceExchange,
+		"routingKeys", consumerOpts.RoutingKeys,
 		"dlx", messaging.IdentityDLXExchange,
 		"retryQueue", messaging.RetryQueueName(messaging.LookupRequestedQueue),
 		"parkingQueue", messaging.ParkingQueueName(messaging.LookupRequestedQueue),
