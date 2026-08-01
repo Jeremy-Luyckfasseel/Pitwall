@@ -385,6 +385,43 @@ func TestGenerateSession_UnknownTokenScans_HeldNotCounted(t *testing.T) {
 	}
 }
 
+// Story 2.5 (review follow-up, Blind#6): UnknownTokenScans > 1 injects that many
+// DISTINCT stray tokens, each held (never counted), not just the N=1 case the other
+// tests exercise.
+func TestGenerateSession_UnknownTokenScans_MultipleStraysAllHeld(t *testing.T) {
+	base := time.Date(2026, 6, 5, 14, 0, 0, 0, time.UTC)
+	cfg := testConfig(rand.New(rand.NewSource(17)))
+	cfg.UnknownTokenScans = 3
+	evs, held := prepared(t, cfg).GenerateSession(base)
+
+	if len(held) != 3 {
+		t.Fatalf("held scans = %d, want 3", len(held))
+	}
+	seen := map[string]bool{}
+	for _, h := range held {
+		if seen[h.Token] {
+			t.Errorf("duplicate held token %q, want 3 distinct strays", h.Token)
+		}
+		seen[h.Token] = true
+		if h.Method != messaging.CheckInMethodTransponder {
+			t.Errorf("held scan Method = %q, want %q", h.Method, messaging.CheckInMethodTransponder)
+		}
+	}
+	if len(seen) != 3 {
+		t.Errorf("distinct held tokens = %d, want 3", len(seen))
+	}
+
+	for _, e := range evs {
+		if e.Type != messaging.LapRecordedRoutingKey {
+			continue
+		}
+		d := e.Data.(messaging.LapRecordedData)
+		if seen[d.MasterID] {
+			t.Errorf("lap.recorded emitted for held/stray token %q — must never be counted", d.MasterID)
+		}
+	}
+}
+
 // Run prepares (resolves ids) then emits a full session through the enqueuer in order,
 // then stops cleanly on ctx cancel — no sleeps (tick/gap zero).
 func TestRun_EmitsSessionAndStopsOnCancel(t *testing.T) {

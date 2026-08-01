@@ -190,6 +190,9 @@ func (s *Simulator) Run(ctx context.Context) error {
 		}
 		session, held := s.GenerateSession(s.now())
 		for _, h := range held {
+			if ctx.Err() != nil {
+				return nil
+			}
 			occurredAt := messaging.FormatWireTime(h.At)
 			if err := s.cfg.RecordHeldScan(ctx, h.Token, h.Method, h.SessionID, occurredAt, h.Reason); err != nil {
 				if ctx.Err() != nil {

@@ -75,9 +75,11 @@ here is **extracted** to `libs/go-pitwall` in Epic 2 (grow-don't-pre-scaffold).
 > bus event (Q&A Round 6/Q6.3, Round 32).
 >
 > **Register-first enforcement + the unknown-token operator exception (Story 2.5, FR39).**
-> Every start-finish crossing is gated on a per-session checked-in registry (built from
-> the drivers `Prepare` register-first-resolved) before it can reach a `LapTracker` — a
-> token with no completed check-in this session is never counted, never minted an id,
+> Within the simulator (the only crossing source through Epic 2 — no real hardware
+> line-scanner exists yet), every start-finish crossing is gated on a per-session
+> checked-in registry (built from the drivers `Prepare` register-first-resolved) before
+> it can reach a `LapTracker` — a token with no completed check-in this session is never
+> counted, never minted an id,
 > never emitted as an anonymous lap. It is **held**: durably recorded in the local
 > `held_line_scans` table (`HeldLineScanStore`, append-only — a future operator
 > late-binding capability would add its own read/update API) and **flagged** with an
