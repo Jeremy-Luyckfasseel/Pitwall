@@ -10,11 +10,12 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import IO
 
 import pika
+from pika.exceptions import AMQPConnectionError
 
 from pitwall_conformance.scenario import repo_root
 
@@ -37,13 +38,20 @@ class DriverProcess:
     proc: subprocess.Popen
     liveness_file: Path
     log_path: Path
-    _stdout_thread: Any = field(default=None, repr=False)
+    _log_file: IO[str]
 
     def log_text(self) -> str:
         try:
             return self.log_path.read_text(encoding="utf-8", errors="replace")
         except FileNotFoundError:
             return ""
+
+    def close(self) -> None:
+        """Closes the log file handle opened by start_driver. The process itself is
+        NOT killed here — callers that need that call proc.kill()/proc.wait() first
+        (this only releases the file handle, safe to call whether or not the process
+        has already exited)."""
+        self._log_file.close()
 
 
 def start_driver(params: pika.ConnectionParameters, interval_ms: int, tmp_path: Path) -> DriverProcess:
@@ -82,7 +90,7 @@ def start_driver(params: pika.ConnectionParameters, interval_ms: int, tmp_path: 
         stdout=log_file,
         stderr=subprocess.STDOUT,
     )
-    return DriverProcess(proc=proc, liveness_file=liveness_file, log_path=log_path)
+    return DriverProcess(proc=proc, liveness_file=liveness_file, log_path=log_path, _log_file=log_file)
 
 
 def observe_heartbeats(
@@ -117,11 +125,19 @@ def observe_heartbeats(
             beats.append(msg)
             if len(beats) >= min_count or time.monotonic() >= deadline:
                 break
+    except AMQPConnectionError as e:
+        raise AssertionError(
+            f"broker connection lost while observing heartbeats (after {len(beats)} beats): {e}"
+        ) from e
     finally:
         try:
             channel.cancel()
-        except Exception:
-            pass
+        except Exception as e:
+            # Cleanup-only: the connection may already be closed/broken at this point
+            # (e.g. after the AMQPConnectionError above), in which case cancel() itself
+            # failing is expected and must not mask the real error. Log, don't swallow
+            # silently, so an unexpected cleanup failure is still visible in test output.
+            print(f"observe_heartbeats: channel.cancel() during cleanup failed: {e}", file=sys.stderr)
         connection.close()
     return beats
 

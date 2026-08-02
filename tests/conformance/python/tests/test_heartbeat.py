@@ -51,3 +51,4 @@ def test_heartbeat_cadence_format_and_graceful_shutdown(tmp_path):
             if driver.proc.poll() is None:
                 driver.proc.kill()
                 driver.proc.wait(timeout=10)
+            driver.close()
