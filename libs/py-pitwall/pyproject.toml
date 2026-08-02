@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "py-pitwall"
+version = "0.1.0"
+description = "Shared Python blueprint machinery for Pitwall's Python services (Story 3.1) — mechanics ONLY, mirrors libs/go-pitwall."
+requires-python = ">=3.14"
+# pitwall-contract (contract/codegen/python) is a REQUIRED runtime dependency but is
+# NOT declared here: it is not published anywhere pip can resolve it from, and a
+# relative-path/file:// dependency in pyproject.toml is fragile across install
+# locations (local dev vs Docker build context vs CI checkout). Instead it is
+# installed as its own explicit step wherever py-pitwall is installed — see
+# README.md "Versioning & wiring" (mirrors Go's two-step "vendor libs/go-pitwall +
+# resolve its own replace" story, just via two separate `pip install -e` calls
+# instead of one `go build`).
+dependencies = [
+    "pydantic>=2,<3",
+    "pika>=1.3,<2",
+    "jsonschema>=4,<5",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "testcontainers[rabbitmq]>=4,<5"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["pitwall"]

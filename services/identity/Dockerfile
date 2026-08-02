@@ -12,6 +12,7 @@ FROM golang:1.26.4 AS build
 ENV GOWORK=off
 WORKDIR /src
 COPY libs/go-pitwall/ ./libs/go-pitwall/
+COPY contract/codegen/go/ ./contract/codegen/go/
 
 WORKDIR /src/services/identity
 # Cache deps on go.mod/go.sum (the lib is replace-pinned local, fetched from context).
@@ -28,7 +29,8 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates && adduser -D -u 10001 pitwall
 
 # The /contract tree is the single source of truth the service validates against at
-# runtime (no codegen yet — that arrives in Epic 3). COPY it into the image.
+# runtime (the generated wire DTOs vendored above are a build-time-only artifact of it).
+# COPY it into the image.
 COPY contract /contract
 COPY --from=build /out/identity /usr/local/bin/identity
 COPY services/identity/healthcheck.sh /usr/local/bin/healthcheck.sh

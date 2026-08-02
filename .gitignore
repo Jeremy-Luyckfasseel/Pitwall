@@ -20,6 +20,8 @@ build/
 !/services/leaderboard/internal/web/dist/.gitkeep
 __pycache__/
 *.pyc
+*.egg-info/
+.pytest_cache/
 bin/
 obj/
 

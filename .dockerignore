@@ -9,3 +9,10 @@ docs
 # Go build artifacts (modules are fetched fresh in the build stage)
 **/bin
 *.exe
+# Python build/test artifacts (deps are installed fresh in the build stage)
+**/__pycache__
+**/*.egg-info
+**/.pytest_cache
+**/*.db
+**/*.db-wal
+**/*.db-shm

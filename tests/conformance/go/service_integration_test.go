@@ -122,6 +122,30 @@ func (p *svcProc) kill(t *testing.T) {
 	p.cmd = nil
 }
 
+// signalAndWait sends sig and blocks (up to timeout) for the process to exit on its
+// own, marking it reaped on success so a later kill() (test cleanup) does not Wait() a
+// second time on an already-exited process. Owns the "already reaped" invariant here,
+// next to kill()'s identical bookkeeping, rather than leaving callers to poke p.cmd
+// directly (Story 3.1 code review — a free helper function reaching into svcProc's
+// unexported field was fragile coupling).
+func (p *svcProc) signalAndWait(sig os.Signal, timeout time.Duration) error {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return fmt.Errorf("signalAndWait: process not running")
+	}
+	if err := p.cmd.Process.Signal(sig); err != nil {
+		return fmt.Errorf("send signal: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- p.cmd.Wait() }()
+	select {
+	case err := <-done:
+		p.cmd = nil // already reaped; a later kill() must not Wait() again
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("process did not exit within %s of signal", timeout)
+	}
+}
+
 // restart simulates a process crash + relaunch on the SAME database/port.
 func (p *svcProc) restart(t *testing.T) {
 	t.Helper()

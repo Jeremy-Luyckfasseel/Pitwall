@@ -4,7 +4,6 @@
   "title": "frontend / privacy.export_requested (v1) data payload",
   "description": "A data-portability request. Published to the 'frontend.events' exchange with routing key 'privacy.export_requested'; each owning service replies with privacy.data_provided, the Control Room assembles the bundle, Mailing delivers it. (ADR-0009.)",
   "type": "object",
-  "additionalProperties": true,
   "required": ["requestId", "masterId", "requestedBy", "at"],
   "properties": {
     "requestId": {

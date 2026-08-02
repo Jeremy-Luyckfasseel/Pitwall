@@ -4,7 +4,6 @@
   "title": "timing / lap.recorded (v1) data payload",
   "description": "A valid crossing of the start-finish line. Published to the 'timing.events' exchange with routing key 'lap.recorded'.",
   "type": "object",
-  "additionalProperties": true,
   "required": ["masterId", "sessionId", "lapNumber", "lapTimeMs", "at"],
   "properties": {
     "masterId": {
@@ -29,7 +28,6 @@
     },
     "at": {
       "type": "string",
-      "format": "date-time",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
       "description": "When the crossing happened. RFC3339 UTC, exactly 3-digit milliseconds, literal 'Z' (AR9). The pattern is enforced (format is annotation-only)."
     },

@@ -1,0 +1,22 @@
+name: heartbeat
+title: Skeleton mechanics — heartbeat cadence/format + graceful shutdown, cross-language
+description: >
+  Story 3.1 (AC4): a service under test (the real built binary/process, no domain
+  producer/consumer wiring — just the blueprint skeleton) connects to RabbitMQ,
+  declares its own exchange, and emits control.heartbeat every intervalMs. The
+  runner observes the RAW bus traffic directly (a temporary queue bound to the
+  service's own exchange on the control.heartbeat routing key) — never a domain
+  read-model — asserting at least minCount contract-valid heartbeats arrive within
+  windowMs. It then sends SIGTERM and asserts the process exits cleanly (code 0)
+  within a bounded time. A Go runner (against Timing, simulator disabled) and a
+  Python runner (against Driver) both implement this scenario against the SAME
+  spec, proving the skeleton mechanics — not just unit-tested per language in
+  isolation — are cross-language equivalent.
+proves: [NFR18, NFR19, NFR20]
+quarantine: false
+heartbeat:
+  intervalMs: 300
+  minCount: 5
+  windowMs: 3000
+expect:
+  gracefulShutdown: true

@@ -4,7 +4,6 @@
   "title": "frontend / privacy.erasure_requested (v1) data payload",
   "description": "A right-to-be-forgotten request. Published to the 'frontend.events' exchange with routing key 'privacy.erasure_requested'; EVERY service consumes it, deletes or anonymizes its local slice for the masterId, and emits privacy.erased. (ADR-0009.)",
   "type": "object",
-  "additionalProperties": true,
   "required": ["requestId", "masterId", "requestedBy", "at"],
   "properties": {
     "requestId": {

@@ -4,7 +4,6 @@
   "title": "billing / giftcard.issued (v1) data payload",
   "description": "Billing (stored-value ledger SoT) ISSUED a bearer gift card after a confirmed purchase (Round 17, ADR-0011). A gift card is an anonymous, transferable stored-value balance redeemed by code — it carries NO PII. Published to 'billing.events' with routing key 'giftcard.issued'; caused by a 'payment.captured' (purpose=giftcard_purchase). Consumed by Bar/POS (local redemption table), Frontend (show in account), Mailing (deliver the code to the recipient).",
   "type": "object",
-  "additionalProperties": true,
   "required": ["giftCardId", "code", "amount", "currency", "sourcePaymentId", "at"],
   "properties": {
     "giftCardId": {

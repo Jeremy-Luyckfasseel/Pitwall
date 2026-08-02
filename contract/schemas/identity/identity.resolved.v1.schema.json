@@ -4,7 +4,6 @@
   "title": "identity / identity.resolved (v1) data payload",
   "description": "Identity's reply to an identity.lookup_requested. Returns the canonical masterId for an email (minted if new, reused if known). No isNew flag by design.",
   "type": "object",
-  "additionalProperties": true,
   "required": ["requestId", "email", "masterId"],
   "properties": {
     "requestId": {

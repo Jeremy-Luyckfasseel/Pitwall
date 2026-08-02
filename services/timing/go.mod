@@ -76,6 +76,11 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-require github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall v0.2.0
+require (
+	github.com/Jeremy-Luyckfasseel/Pitwall/contract/codegen/go v0.0.0
+	github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall v0.2.0
+)
 
 replace github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall => ../../libs/go-pitwall
+
+replace github.com/Jeremy-Luyckfasseel/Pitwall/contract/codegen/go => ../../contract/codegen/go

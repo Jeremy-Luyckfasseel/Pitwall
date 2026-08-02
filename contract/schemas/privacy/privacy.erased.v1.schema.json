@@ -4,7 +4,6 @@
   "title": "privacy.erased (v1) data payload",
   "description": "A per-service acknowledgement that a service has erased or anonymized its local slice for a masterId. Published by EVERY service to its OWN '<service>.events' exchange with routing key 'privacy.erased'; consumed by the Control Room to track erasure completion. (ADR-0009.)",
   "type": "object",
-  "additionalProperties": true,
   "required": ["requestId", "masterId", "service", "mode", "at"],
   "properties": {
     "requestId": {
@@ -28,8 +27,8 @@
     },
     "at": {
       "type": "string",
-      "format": "date-time",
-      "description": "When this service completed erasure (RFC3339 UTC)."
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      "description": "When this service completed erasure. RFC3339 UTC, exactly 3-digit milliseconds, literal 'Z' (AR9). The pattern is enforced (format is annotation-only)."
     }
   }
 }

@@ -18,6 +18,9 @@ contract/
     <service>/<entity>.<action>.v<N>.schema.json   # the data payload per event+version
   examples/
     <service>/<entity>.<action>.v<N>.example.json
+  codegen/
+    go/                                       # generated Go wire DTOs (own go.mod)
+    python/                                   # generated Pydantic v2 wire DTOs (own pyproject.toml)
 ```
 
 ## Wire Contract Rules (NORMATIVE — MUST / SHOULD / MAY per RFC-2119)
@@ -54,8 +57,13 @@ disagree, the schema wins; fix the README.**
   **additive** change (a new optional field) needs **no** `schemaVersion` bump; consumers ignore
   unknown fields. A **breaking** change → a new `vN` schema + new routing key/version, run side by
   side during migration.
-- **Consume by vendoring / codegen.** Vendor (copy / submodule) into each service; wire DTOs **SHOULD**
-  be code-generated from these schemas (`make contract`) so the three languages cannot drift.
+- **Consume by vendoring / codegen.** This `/contract` tree is vendored (COPYed) into each service's
+  Docker build; wire DTOs **ARE** code-generated from these schemas via `make contract` (Go:
+  `go-jsonschema` → `contract/codegen/go/`; Python: `datamodel-code-generator` → Pydantic v2 →
+  `contract/codegen/python/`; TypeScript joins when that tier arrives) — generated output is
+  committed and CI-freshness-gated (`git diff --exit-code -- contract/codegen`), so the languages
+  cannot drift. Codegen owns the wire boundary only; domain models stay hand-written and idiomatic,
+  mapped to/from the generated DTOs at the edge.
 
 ## How each service uses it
 1. Load `envelope.schema.json` + the schema for the event it's handling.

@@ -32,6 +32,8 @@ jobs:
               - 'scripts/check-schema-lint.py'
               - 'scripts/validate-contract.py'
               - 'scripts/check-invalid-fixtures.py'
+              - 'scripts/generate-contract-go.sh'
+              - 'scripts/generate-contract-python.sh'
               - 'tests/contract/**'
               - 'pytest.ini'
             services:
@@ -108,6 +110,42 @@ jobs:
       - name: pytest — exhaustive contract validation
         run: python -m pytest tests/contract
 
+  contract-codegen-freshness:
+    # Story 3.1 (AC1): wire DTOs are code-generated from /contract into contract/codegen/
+    # and committed (reviewable diffs, offline-reproducible). This gate regenerates them
+    # and fails the build if the committed output is stale — the freshness gate is what
+    # makes "generated output is committed" trustworthy instead of aspirational.
+    needs: changes
+    if: ${{ needs.changes.outputs.contract == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install --quiet "datamodel-code-generator==0.71.0" pytest
+      - name: Regenerate contract/codegen (Go + Python) and fail on drift
+        run: |
+          sh scripts/generate-contract-go.sh
+          sh scripts/generate-contract-python.sh
+          git diff --exit-code -- contract/codegen
+      - name: Build + vet + test the generated Go module (round-trip fixtures)
+        working-directory: contract/codegen/go
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./...
+      - name: Install + test the generated Python package (round-trip fixtures)
+        working-directory: contract/codegen/python
+        run: |
+          python -m pip install --quiet -e .
+          python -m pytest tests/ -v
+
   libs-go:
     # The shared Go blueprint library (libs/go-pitwall, Story 2.1): build + vet + unit
     # tests for the extracted mechanics (logger, envelope+validator, persistence
@@ -139,6 +177,55 @@ jobs:
         run: go vet ./...
       - name: Unit tests
         run: go test ./...
+
+  libs-python:
+    # The shared Python blueprint library (libs/py-pitwall, Story 3.1): logger, envelope
+    # codec (built on the generated pitwall-contract models), /contract validator, SQLite
+    # persistence (outbox/inbox), DLQ backoff policy, pika messaging (DLQ topology +
+    # reconnect wrapper), heartbeat emitter, erasure scaffold. Depends on pitwall-contract
+    # (contract/codegen/python) — installed first. Triggered by libs/** and the contract/**
+    # fan-out (the validator + generated envelope model both derive from /contract).
+    needs: changes
+    if: ${{ needs.changes.outputs.libs == 'true' || needs.changes.outputs.contract == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install --quiet -e contract/codegen/python
+      - run: pip install --quiet -e "libs/py-pitwall[test]"
+      - name: Unit tests (broker-free)
+        run: pytest libs/py-pitwall/tests --deselect libs/py-pitwall/tests/test_messaging_integration.py
+      - name: Start RabbitMQ (real-broker DLQ/reconnect integration tests)
+        # Via testcontainers, not a bare `docker run`: a bare `docker run -d --name
+        # ci-rabbitmq -p 5672:5672 rabbitmq:4.3-management-alpine` (± RABBITMQ_ERLANG_
+        # COOKIE, ± --tmpfs /var/lib/rabbitmq — both tried and both failed identically)
+        # consistently crashed on this runner within seconds with "Error when reading
+        # /var/lib/rabbitmq/.erlang.cookie: eacces" during Erlang distribution
+        # prelaunch, confirmed via CI-only diagnostic logging across three separate
+        # attempts. Every OTHER job in this workflow using the identical image via
+        # testcontainers (driver-python, e2e-smoke-python, tests/conformance/python)
+        # passes reliably, so rather than keep reverse-engineering exactly which
+        # container option testcontainers sets that avoids the crash, this job now
+        # just uses the same proven mechanism: start the container here, export its
+        # connection URL as PITWALL_TEST_AMQP_URL (test_messaging_integration.py
+        # already reads that env var, unchanged), and leave the container running for
+        # the next step (testcontainers' Ryuk sidecar reaps it when the job's Docker
+        # session ends — no explicit stop needed).
+        run: |
+          python3 -c "
+          from testcontainers.community.rabbitmq import RabbitMqContainer
+          c = RabbitMqContainer('rabbitmq:4.3-management-alpine')
+          c.start()
+          p = c.get_connection_params()
+          url = f'amqp://{p.credentials.username}:{p.credentials.password}@{p.host}:{p.port}{p.virtual_host}'
+          with open('$GITHUB_ENV', 'a') as f:
+              f.write(f'PITWALL_TEST_AMQP_URL={url}\n')
+          print(f'RabbitMQ ready at {p.host}:{p.port}')
+          "
+      - name: Integration tests (real RabbitMQ)
+        run: pytest libs/py-pitwall/tests/test_messaging_integration.py
 
   timing-go:
     # The Timing Go service skeleton (Story 1.3). Build + vet + unit tests always; the
@@ -233,6 +320,31 @@ jobs:
       - name: Integration tests (real RabbitMQ via testcontainers)
         run: go test -tags=integration -timeout 600s ./test/integration/...
 
+  driver-python:
+    # The Driver Python service skeleton (Story 3.1): connects to the bus (retried,
+    # supervised across broker restarts), declares its own driver.events exchange,
+    # emits control.heartbeat, drains its own outbox via the relay, graceful shutdown —
+    # no domain logic yet (Story 3.2+). Depends on pitwall-contract + py-pitwall —
+    # installed first. Triggered by services/** and the contract/** fan-out.
+    needs: changes
+    if: ${{ needs.changes.outputs.services == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install --quiet -e contract/codegen/python
+      - run: pip install --quiet -e libs/py-pitwall
+      - run: pip install --quiet -e "services/driver[test]"
+      - name: Unit tests (broker-free)
+        run: pytest services/driver/tests --ignore=services/driver/tests/test_integration.py
+      - name: Integration tests (real RabbitMQ + SQLite via testcontainers-python — outbox relay drain, inbox dedupe)
+        run: pytest services/driver/tests/test_integration.py
+      - name: Alembic migration smoke (creates the outbox/inbox tables)
+        working-directory: services/driver
+        run: DB_PATH=./ci-migration-check.db python -m alembic upgrade head
+
   e2e-smoke:
     # The 4th test layer (NFR23): the cross-language conformance harness + e2e smoke.
     # A thin Go runner (tests/conformance/go) drives the REAL built service binaries
@@ -256,6 +368,30 @@ jobs:
         run: go test ./...
       - name: Conformance + e2e smoke (required lane — real binaries + real RabbitMQ)
         run: go test -tags=integration -timeout 900s ./...
+
+  e2e-smoke-python:
+    # Story 3.1 (AC4): the Python side of the cross-language conformance harness —
+    # reads the SAME tests/conformance/scenarios/heartbeat.yaml the Go runner reads,
+    # drives the REAL Driver process (python -m driver.main) against a real RabbitMQ
+    # (testcontainers-python), and asserts identical observable outcomes (heartbeat
+    # cadence/format on the wire, graceful SIGTERM shutdown). Only the heartbeat
+    # scenario has a Python runner today — the reliability scenarios (peer-down,
+    # inbox-dup, ...) stay Go-only until Driver has domain logic to exercise them
+    # against (Story 3.2+).
+    needs: changes
+    if: ${{ needs.changes.outputs.e2e == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install --quiet -e contract/codegen/python
+      - run: pip install --quiet -e libs/py-pitwall
+      - run: pip install --quiet -e services/driver
+      - run: pip install --quiet -e tests/conformance/python
+      - name: Conformance heartbeat scenario (real Driver process + real RabbitMQ)
+        run: pytest tests/conformance/python/tests
 
   e2e-smoke-quarantine:
     # The quarantine lane (AR16: a flaky scenario goes here, NEVER @skip). It STILL

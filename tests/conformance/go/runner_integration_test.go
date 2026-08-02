@@ -18,6 +18,7 @@ var scenarioRunners = map[string]func(t *testing.T, sc Scenario){
 	"inbox-dup":         runInboxDup,
 	"publish-redeliver": runPublishRedeliver,
 	"crash-after-ack":   runCrashAfterAck,
+	"heartbeat":         runHeartbeat,
 }
 
 // TestConformance is the single entry point: it loads the whole scenario spec,

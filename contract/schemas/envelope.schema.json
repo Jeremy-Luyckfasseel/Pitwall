@@ -4,7 +4,6 @@
   "title": "Pitwall message envelope",
   "description": "Every message on the bus uses this envelope. The event-specific payload lives under `data` and is validated against its own schema based on `type` + `schemaVersion`. All JSON field names are camelCase; all UUIDs are lowercase canonical (readers normalize-then-validate); all timestamps are RFC3339 UTC with exactly 3-digit milliseconds and a literal `Z`. See contract/README.md (Wire Contract Rules).",
   "type": "object",
-  "additionalProperties": true,
   "required": ["id", "type", "source", "schemaVersion", "envelopeVersion", "occurredAt", "correlationId", "causationId", "data"],
   "properties": {
     "id": {
@@ -34,7 +33,6 @@
     },
     "occurredAt": {
       "type": "string",
-      "format": "date-time",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
       "description": "When the fact happened. RFC3339 UTC, exactly 3-digit milliseconds, literal 'Z' (never '+00:00')."
     },

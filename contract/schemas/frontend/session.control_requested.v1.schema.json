@@ -4,7 +4,6 @@
   "title": "frontend / session.control_requested (v1) data payload",
   "description": "An operator race-control action to start or end a session. Published to the 'frontend.events' exchange with routing key 'session.control_requested'; consumed by Timing, which turns it into the ACTUAL session.started / session.ended. (ADR-0010.)",
   "type": "object",
-  "additionalProperties": true,
   "required": ["requestId", "sessionId", "action", "adminActor", "at"],
   "properties": {
     "requestId": {

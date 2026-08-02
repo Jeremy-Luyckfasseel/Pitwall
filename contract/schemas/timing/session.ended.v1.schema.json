@@ -4,7 +4,6 @@
   "title": "timing / session.ended (v1) data payload",
   "description": "The ACTUAL (physical) end of a session plus its summary, emitted by Timing. Published to the 'timing.events' exchange with routing key 'session.ended'. Consumers: Booking, Billing (close tab), Driver (store summary), Mailing (session summary), Leaderboard (mark finished). NOTE: the per-item shape of `summary[]` is NOT pinned by the source corpus and is intentionally left tolerant (additionalProperties:true, no required item fields) — no Epic-1 consumer reads summary contents. Pin the item fields when Driver/Mailing actually consume them (Epic 3/10). Confirm-at-build, do not invent.",
   "type": "object",
-  "additionalProperties": true,
   "required": ["sessionId", "endedAt", "summary"],
   "properties": {
     "sessionId": {
@@ -13,7 +12,6 @@
     },
     "endedAt": {
       "type": "string",
-      "format": "date-time",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
       "description": "When the session actually ended. RFC3339 UTC, exactly 3-digit milliseconds, literal 'Z' (AR9). The pattern is enforced (format is annotation-only)."
     },
@@ -21,8 +19,7 @@
       "type": "array",
       "description": "Per-session result rows (e.g. one per driver, with lap times). Item shape intentionally unpinned for v1 — tolerant object.",
       "items": {
-        "type": "object",
-        "additionalProperties": true
+        "type": "object"
       }
     }
   }

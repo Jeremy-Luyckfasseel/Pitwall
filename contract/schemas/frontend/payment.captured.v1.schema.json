@@ -4,7 +4,6 @@
   "title": "frontend / payment.captured (v1) data payload",
   "description": "An online card payment was CONFIRMED captured by the PSP at the Frontend payments edge, to LOAD stored value (the only online card operation; Round 17, ADR-0011). Published to 'frontend.events' with routing key 'payment.captured'; consumed by Billing (which credits the stored-value ledger and emits the balance fact). The edge emits this from its OUTBOX, so a confirmed payment survives the bus being down. 'paymentId' is the dedupe key for duplicate PSP webhooks.",
   "type": "object",
-  "additionalProperties": true,
   "required": ["paymentId", "provider", "purpose", "amount", "currency", "capturedAt"],
   "properties": {
     "paymentId": {

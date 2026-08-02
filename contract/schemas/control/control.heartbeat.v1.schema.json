@@ -4,7 +4,6 @@
   "title": "control / control.heartbeat (v1) data payload",
   "description": "A 1 s liveness signal emitted by EVERY service. Like privacy.erased, it is a cross-cutting event: each service publishes it to its OWN '<service>.events' exchange (the `source` envelope field names the emitter) with routing key 'control.heartbeat'; the Control Room binds a wildcard and aggregates to detect DOWN (3 misses). The 'control' namespace reflects the catalog grouping, not the owning exchange. (Q&A Round 25; ADR-0004 bus-only health.)",
   "type": "object",
-  "additionalProperties": true,
   "required": ["service", "at", "instanceId"],
   "properties": {
     "service": {
@@ -13,7 +12,6 @@
     },
     "at": {
       "type": "string",
-      "format": "date-time",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
       "description": "When the heartbeat was emitted. RFC3339 UTC, exactly 3-digit milliseconds, literal 'Z' (AR9). The pattern is enforced (format is annotation-only)."
     },

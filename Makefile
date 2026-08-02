@@ -2,7 +2,7 @@
 # Targets grow as the platform does (walking-skeleton-first). Recipes are POSIX sh; run on
 # Linux / macOS / WSL / git-bash (the CI runners and the VPS).
 .DEFAULT_GOAL := help
-.PHONY: help up down clean logs contract-test contract test smoke smoke-quarantine prod-config
+.PHONY: help up down clean logs contract-test contract contract-freshness test test-python smoke smoke-python smoke-quarantine prod-config
 
 help: ## Show this help
 	@echo "Pitwall make targets:"
@@ -43,17 +43,36 @@ contract-test: ## Run the contract gates (schema-lint + example validation + kno
 	bash scripts/check-corpus-coherence.sh
 	python3 -m pytest tests/contract
 
-contract: ## (placeholder) Wire-DTO codegen — introduced with the 2nd language (Epic 2 / AR15 step 4)
-	@echo "make contract: nothing to generate yet — codegen arrives with the 2nd language (Epic 2 / AR15 step 4)."
+contract: ## Generate wire DTOs from /contract (Go: go-jsonschema; Python: datamodel-code-generator) into contract/codegen/, committed + CI freshness-gated
+	sh scripts/generate-contract-go.sh
+	sh scripts/generate-contract-python.sh
+
+contract-freshness: ## Freshness gate: regenerate contract/codegen and fail if committed output is stale
+	$(MAKE) contract
+	git diff --exit-code -- contract/codegen
 
 test: ## Go unit tests. Shared lib + each service; integration (real RabbitMQ via testcontainers) needs Docker.
 	cd libs/go-pitwall && go build ./... && go vet ./... && go test ./...
 	cd services/timing && go build ./... && go vet ./... && go test ./...
 	cd services/leaderboard && go build ./... && go vet ./... && go test ./...
+	cd services/identity && go build ./... && go vet ./... && go test ./...
 	@echo "Integration tests (need Docker): cd services/<svc> && go test -tags=integration ./test/integration/..."
 
-smoke: ## Cross-language conformance harness + e2e smoke — REQUIRED lane (real binaries + real RabbitMQ via testcontainers; needs Docker)
+test-python: ## Python unit tests. pitwall-contract + py-pitwall + Driver; py-pitwall's DLQ/reconnect tests and Driver's outbox-relay/inbox integration test need Docker.
+	pip install --quiet -e contract/codegen/python
+	pip install --quiet -e "libs/py-pitwall[test]"
+	pip install --quiet -e "services/driver[test]"
+	python3 -m pytest --import-mode=importlib contract/codegen/python/tests libs/py-pitwall/tests services/driver/tests
+
+smoke: ## Go side of the conformance harness + e2e smoke — REQUIRED lane (real binaries + real RabbitMQ via testcontainers; needs Docker)
 	cd tests/conformance/go && go test -tags=integration -timeout 900s ./...
+
+smoke-python: ## Python side of the conformance harness (heartbeat scenario against the real Driver process; needs Docker)
+	pip install --quiet -e contract/codegen/python
+	pip install --quiet -e libs/py-pitwall
+	pip install --quiet -e services/driver
+	pip install --quiet -e tests/conformance/python
+	python3 -m pytest tests/conformance/python/tests
 
 smoke-quarantine: ## Conformance QUARANTINE lane — flaky scenarios, non-blocking (AR16: quarantine, never @skip)
 	cd tests/conformance/go && CONFORMANCE_LANE=quarantine go test -tags=integration -timeout 900s ./...

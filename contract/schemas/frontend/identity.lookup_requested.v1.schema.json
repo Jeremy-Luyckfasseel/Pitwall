@@ -4,7 +4,6 @@
   "title": "frontend / identity.lookup_requested (v1) data payload",
   "description": "A request for the canonical masterId for an email. Originates from a register-first flow (Frontend online registration; the counter/kiosk in later epics) and is published to the ORIGINATING service's own exchange (e.g. frontend.events). Identity binds and replies identity.resolved. The requester never mints an id (FR1/FR39).",
   "type": "object",
-  "additionalProperties": true,
   "required": ["requestId", "email"],
   "properties": {
     "requestId": {

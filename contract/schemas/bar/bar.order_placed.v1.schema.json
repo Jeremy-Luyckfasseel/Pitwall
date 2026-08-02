@@ -4,7 +4,6 @@
   "title": "bar / bar.order_placed (v1) data payload",
   "description": "A bar/POS order to charge. Published to the 'bar.events' exchange with routing key 'bar.order_placed'; consumed by Billing. 'masterId' is OPTIONAL: when absent the sale is ANONYMOUS (no tab, immediately settled, no PII) per Round 15. Optional masterId is additive/tolerant-reader-safe, so this stays schemaVersion 1.",
   "type": "object",
-  "additionalProperties": true,
   "required": ["orderId", "items", "total", "at"],
   "properties": {
     "orderId": {
@@ -22,7 +21,6 @@
       "description": "Line items in the order.",
       "items": {
         "type": "object",
-        "additionalProperties": true,
         "required": ["name", "quantity", "unitPrice"],
         "properties": {
           "name": { "type": "string", "description": "Product name." },

@@ -6,6 +6,7 @@
 go 1.26.4
 
 use (
+	./contract/codegen/go
 	./libs/go-pitwall
 	./services/identity
 	./services/leaderboard

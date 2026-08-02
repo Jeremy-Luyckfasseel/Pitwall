@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pitwall-driver"
+version = "0.1.0"
+description = "Driver service — Python skeleton (Story 3.1). Racing profile/lap history domain logic lands in Story 3.2+."
+requires-python = ">=3.14"
+# pitwall-contract and py-pitwall are installed as separate explicit steps (see
+# libs/py-pitwall/README.md "Versioning & wiring") — not declared here for the same
+# reason py-pitwall doesn't declare pitwall-contract: no resolvable index location.
+dependencies = [
+    "alembic>=1.13,<2",
+    "sqlalchemy>=2,<3",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "testcontainers[rabbitmq]>=4,<5"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["driver"]

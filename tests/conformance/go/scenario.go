@@ -41,9 +41,21 @@ type Scenario struct {
 	// Fixture, when present, declares a deterministic lap fixture the harness
 	// publishes itself (consumer-focused scenarios: inbox-dup, publish-redeliver, crash-after-ack).
 	Fixture *FixtureSpec `yaml:"fixture"`
+	// Heartbeat, when present, declares this is a skeleton-mechanics scenario (Story
+	// 3.1, AC4): the runner starts the REAL service binary/process (no domain
+	// producer/consumer wiring needed) and observes its 1 s control.heartbeat directly
+	// on the bus, rather than through a domain read-model like the board.
+	Heartbeat *HeartbeatSpec `yaml:"heartbeat"`
 
 	// Expect is the observable outcome the runner asserts on the served board.
 	Expect ExpectSpec `yaml:"expect"`
+}
+
+// HeartbeatSpec parameterizes the heartbeat skeleton-mechanics scenario (Story 3.1).
+type HeartbeatSpec struct {
+	IntervalMs int `yaml:"intervalMs"` // HEARTBEAT_INTERVAL_MS set on the service under test
+	MinCount   int `yaml:"minCount"`   // minimum number of heartbeats to observe within WindowMs
+	WindowMs   int `yaml:"windowMs"`   // observation window
 }
 
 // SimulatorSpec mirrors the Timing simulator's data-shaping knobs (the
@@ -97,6 +109,9 @@ type ExpectSpec struct {
 	// TransponderCheckIns is the expected number of check-ins with checkInMethod
 	// "transponder" (the rest "qr") — proves the transponder map resolution (AC2).
 	TransponderCheckIns int `yaml:"transponderCheckIns"`
+	// GracefulShutdown (heartbeat scenario, Story 3.1): the service under test must
+	// exit cleanly (code 0) within a bounded time after SIGTERM.
+	GracefulShutdown bool `yaml:"gracefulShutdown"`
 }
 
 // LoadScenario parses one scenarios/*.yaml file into a Scenario.
