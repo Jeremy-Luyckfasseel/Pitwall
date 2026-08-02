@@ -303,10 +303,11 @@ jobs:
         run: go test -tags=integration -timeout 600s ./test/integration/...
 
   driver-python:
-    # The Driver Python service skeleton (Story 3.1): connects to the bus, declares its
-    # own driver.events exchange, emits control.heartbeat, graceful shutdown — no domain
-    # logic yet (Story 3.2+). Depends on pitwall-contract + py-pitwall — installed first.
-    # Triggered by services/** and the contract/** fan-out.
+    # The Driver Python service skeleton (Story 3.1): connects to the bus (retried,
+    # supervised across broker restarts), declares its own driver.events exchange,
+    # emits control.heartbeat, drains its own outbox via the relay, graceful shutdown —
+    # no domain logic yet (Story 3.2+). Depends on pitwall-contract + py-pitwall —
+    # installed first. Triggered by services/** and the contract/** fan-out.
     needs: changes
     if: ${{ needs.changes.outputs.services == 'true' }}
     runs-on: ubuntu-latest
@@ -318,8 +319,10 @@ jobs:
       - run: pip install --quiet -e contract/codegen/python
       - run: pip install --quiet -e libs/py-pitwall
       - run: pip install --quiet -e "services/driver[test]"
-      - name: Unit tests
-        run: pytest services/driver/tests
+      - name: Unit tests (broker-free)
+        run: pytest services/driver/tests --ignore=services/driver/tests/test_integration.py
+      - name: Integration tests (real RabbitMQ + SQLite via testcontainers-python — outbox relay drain, inbox dedupe)
+        run: pytest services/driver/tests/test_integration.py
       - name: Alembic migration smoke (creates the outbox/inbox tables)
         working-directory: services/driver
         run: DB_PATH=./ci-migration-check.db python -m alembic upgrade head
