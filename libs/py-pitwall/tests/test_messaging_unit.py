@@ -41,6 +41,55 @@ def test_parse_retry_count_defensive(headers, want):
     assert _parse_retry_count(headers) == want
 
 
+def test_publish_before_connect_raises_clear_error():
+    bus = Bus("amqp://localhost", "driver.events")
+    with pytest.raises(RuntimeError, match="connect"):
+        bus.publish("some.routing.key", b"{}")
+
+
+def test_is_connected_false_before_connect():
+    bus = Bus("amqp://localhost", "driver.events")
+    assert bus.is_connected() is False
+
+
+def test_is_connected_reflects_connection_open_state():
+    bus = Bus("amqp://localhost", "driver.events")
+    conn = MagicMock()
+    conn.is_open = True
+    bus._connection = conn
+    assert bus.is_connected() is True
+    conn.is_open = False
+    assert bus.is_connected() is False
+
+
+def test_publish_serializes_concurrent_calls_with_a_lock():
+    import threading
+    import time
+
+    bus = Bus("amqp://localhost", "driver.events")
+    ch = MagicMock()
+    order = []
+
+    def slow_publish(**kwargs):
+        order.append("start")
+        time.sleep(0.02)
+        order.append("end")
+
+    ch.basic_publish.side_effect = slow_publish
+    bus._channel = ch
+
+    threads = [threading.Thread(target=bus.publish, args=("k", b"{}")) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=2.0)
+
+    # Each publish's start/end must be adjacent -- a lock violation would interleave
+    # two "start" entries before the matching "end".
+    for i in range(0, len(order), 2):
+        assert order[i : i + 2] == ["start", "end"]
+
+
 def test_declare_dlq_topology_requires_dlx_exchange():
     bus = Bus("amqp://localhost", "driver.events")
     bus._channel = MagicMock()

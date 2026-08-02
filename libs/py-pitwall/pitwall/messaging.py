@@ -10,6 +10,7 @@ domain payload shapes (passed in as ConsumerOptions).
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -84,6 +85,13 @@ class Bus:
         self._connection: pika.BlockingConnection | None = None
         self._channel: Any = None
         self._dlx: str | None = None
+        # pika's BlockingConnection/BlockingChannel is not safe for concurrent use
+        # from multiple threads (a raw AMQP frame write could interleave and corrupt
+        # the wire). publish() is the one method this skeleton calls from more than
+        # one thread (the heartbeat emitter and the outbox relay both publish), so it
+        # is serialized; consume()/declare_dlq_topology()/close() are single-thread
+        # (main-thread-only) in this story and are not additionally guarded.
+        self._publish_lock = threading.Lock()
 
     def connect(self) -> None:
         """Dials the broker, opens a channel, and declares the service's own durable
@@ -92,15 +100,23 @@ class Bus:
         self._channel = self._connection.channel()
         self._channel.exchange_declare(exchange=self._exchange, exchange_type="topic", durable=True)
 
+    def is_connected(self) -> bool:
+        """Reports whether the underlying broker connection is still open (used by a
+        supervising reconnect loop to detect a dropped connection between publishes)."""
+        return self._connection is not None and self._connection.is_open
+
     def publish(self, routing_key: str, body: bytes) -> None:
         """Sends a persistent JSON message to the service's OWN exchange (e.g. the 1 s
-        heartbeat, or an outbox row)."""
-        self._channel.basic_publish(
-            exchange=self._exchange,
-            routing_key=routing_key,
-            body=body,
-            properties=pika.BasicProperties(content_type="application/json", delivery_mode=2),
-        )
+        heartbeat, or an outbox row). Safe to call from multiple threads."""
+        if self._channel is None:
+            raise RuntimeError("Bus.publish called before connect()")
+        with self._publish_lock:
+            self._channel.basic_publish(
+                exchange=self._exchange,
+                routing_key=routing_key,
+                body=body,
+                properties=pika.BasicProperties(content_type="application/json", delivery_mode=2),
+            )
 
     def declare_dlq_topology(self, opts: ConsumerOptions) -> None:
         """Declares the full consumer-side DLQ topology for the given work queue and
