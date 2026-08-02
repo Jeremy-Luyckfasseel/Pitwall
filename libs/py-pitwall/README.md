@@ -19,11 +19,15 @@ library supplies the reusable plumbing:
 - `pitwall.validate` — `/contract` JSON-Schema validator wrapper (`jsonschema`-backed;
   validate-on-publish / -on-consume; deliberately independent of the generated Pydantic
   models — codegen and validation are separate concerns, same as the Go library)
-- `pitwall.persistence` — SQLite open (WAL + busy-timeout + FK pragmas) · Alembic
-  migration runner · transactional **outbox** store · idempotent **inbox** (dedupe on
-  envelope `id`)
-- `pitwall.messaging` — `pika`-based (sync, Q&A Round 34/Q34.2) reconnect supervisor ·
-  publisher · consumer · outbox relay · **DLQ / TTL-retry / parking** helpers
+- `pitwall.persistence` — SQLite open (WAL + busy-timeout + FK pragmas) · transactional
+  **outbox** store · idempotent **inbox** (dedupe on envelope `id`) — migrations are
+  each service's own Alembic config (no lib wrapper; Alembic's own CLI/`command.py` API
+  is already the generic runner, see Story 3.1 Task 5.1)
+- `pitwall.relay` — the outbox publisher loop: drains `pitwall.persistence`'s outbox
+  oldest-first, validates against `/contract`, publishes, and marks sent — the
+  reliability spine, mirroring `libs/go-pitwall/relay`
+- `pitwall.messaging` — `pika`-based (sync, Q&A Round 34/Q34.2) publisher · consumer ·
+  `run_with_reconnect` supervisor · **DLQ / TTL-retry / parking** helpers
 - `pitwall.heartbeat` — 1 s liveness emitter (injected publisher + clock;
   unit-testable without a broker)
 - `pitwall.erasure` — reusable **erasure-handler scaffold + tombstone-guard** (inbox →
