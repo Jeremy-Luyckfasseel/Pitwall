@@ -43,8 +43,9 @@ contract-test: ## Run the contract gates (schema-lint + example validation + kno
 	bash scripts/check-corpus-coherence.sh
 	python3 -m pytest tests/contract
 
-contract: ## Generate wire DTOs from /contract (Go: go-jsonschema) into contract/codegen/, committed + CI freshness-gated
+contract: ## Generate wire DTOs from /contract (Go: go-jsonschema; Python: datamodel-code-generator) into contract/codegen/, committed + CI freshness-gated
 	sh scripts/generate-contract-go.sh
+	sh scripts/generate-contract-python.sh
 
 contract-freshness: ## Freshness gate: regenerate contract/codegen and fail if committed output is stale
 	$(MAKE) contract

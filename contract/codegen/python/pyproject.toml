@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pitwall-contract"
+version = "0.1.0"
+description = "Generated Pydantic v2 wire DTOs from /contract (Story 3.1, AC1). Codegen output only — do not hand-edit."
+requires-python = ">=3.14"
+dependencies = ["pydantic>=2,<3"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["pitwall_contract"]
