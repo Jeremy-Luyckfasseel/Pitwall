@@ -30,6 +30,14 @@
 #       story's Dev Agent Record for Task 3).
 #   --output-model-type pydantic_v2.BaseModel / --target-pydantic-version 2
 #       Pinned per architecture (Python 3.14.x, Pydantic v2).
+#   --disable-timestamp
+#       Without this, every generated file's header comment embeds the wall-clock time
+#       of the run, so `make contract-freshness`'s regenerate-then-diff CI gate would
+#       ALWAYS show drift (a timestamp that can never match the previously committed
+#       one) regardless of whether the actual generated code changed — found only when
+#       this gate first ran for real in CI (Story 3.1 code review), since local dev
+#       runs of `make contract-freshness` on an unmodified tree happened to be run
+#       close enough in time that this was never noticed by inspection.
 set -e
 cd "$(dirname "$0")/.."
 
@@ -45,6 +53,7 @@ python3 -m datamodel_code_generator \
   --target-pydantic-version 2 \
   --type-mappings "string+uuid=string" "string+date-time=string" \
   --snake-case-field \
+  --disable-timestamp \
   --formatters builtin
 
 echo "done."
