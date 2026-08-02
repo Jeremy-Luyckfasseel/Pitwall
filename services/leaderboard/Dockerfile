@@ -23,6 +23,7 @@ FROM golang:1.26.4 AS build
 ENV GOWORK=off
 WORKDIR /src
 COPY libs/go-pitwall/ ./libs/go-pitwall/
+COPY contract/codegen/go/ ./contract/codegen/go/
 
 WORKDIR /src/services/leaderboard
 COPY services/leaderboard/go.mod services/leaderboard/go.sum ./
@@ -39,7 +40,8 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates && adduser -D -u 10001 pitwall
 
 # The /contract tree is the single source of truth the service validates against
-# at runtime (no codegen yet — Epic 2). COPY it into the image.
+# at runtime (the generated wire DTOs vendored above are a build-time-only artifact of
+# it). COPY it into the image.
 COPY contract /contract
 COPY --from=build /out/leaderboard /usr/local/bin/leaderboard
 COPY services/leaderboard/healthcheck.sh /usr/local/bin/healthcheck.sh
