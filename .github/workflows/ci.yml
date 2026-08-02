@@ -198,16 +198,19 @@ jobs:
       - name: Unit tests (broker-free)
         run: pytest libs/py-pitwall/tests --deselect libs/py-pitwall/tests/test_messaging_integration.py
       - name: Start RabbitMQ (real-broker DLQ/reconnect integration tests)
-        # RABBITMQ_ERLANG_COOKIE is set explicitly: without it, the image's entrypoint
-        # auto-generates /var/lib/rabbitmq/.erlang.cookie and chmods it — a step that
-        # races/fails under this runner's container conditions ("Error when reading
-        # /var/lib/rabbitmq/.erlang.cookie: eacces", a well-documented issue with the
-        # official image), crashing the broker within seconds of every start. Setting
-        # the cookie ourselves skips that generation step entirely. Found via CI-only
-        # diagnostic logging (docker logs on failure) after the container crashed
-        # silently in this job specifically — every OTHER job in this workflow using
+        # --tmpfs /var/lib/rabbitmq: the image declares that path as a VOLUME: Docker
+        # allocates an anonymous volume for it on every run, and on this runner that
+        # volume's underlying overlay storage consistently comes back with permissions
+        # the container's non-root rabbitmq user cannot read ("Error when reading
+        # /var/lib/rabbitmq/.erlang.cookie: eacces", crashing the broker within
+        # seconds of every start — confirmed via CI-only diagnostic logging, and NOT
+        # fixed by setting RABBITMQ_ERLANG_COOKIE explicitly, which was tried first and
+        # still failed identically). A tmpfs mount gets fresh, correctly-owned storage
+        # from the kernel instead of Docker's volume driver, sidestepping whatever is
+        # wrong with this runner's overlay setup — verified locally (Server startup
+        # complete, clean ping) before landing. Every OTHER job in this workflow using
         # the same image via testcontainers was unaffected (different startup path).
-        run: docker run -d --name ci-rabbitmq -p 5672:5672 -e RABBITMQ_ERLANG_COOKIE=ci-test-cookie rabbitmq:4.3-management-alpine
+        run: docker run -d --name ci-rabbitmq -p 5672:5672 --tmpfs /var/lib/rabbitmq rabbitmq:4.3-management-alpine
       - name: Wait for RabbitMQ
         run: |
           for i in $(seq 1 30); do
