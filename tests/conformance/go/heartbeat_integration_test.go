@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -186,24 +187,12 @@ func assertHeartbeatShape(t *testing.T, b heartbeatMsg, wantService string) {
 // still runs and gates locally exactly as it does in CI.
 func assertGracefulShutdown(t *testing.T, p *svcProc) {
 	t.Helper()
-	if p.cmd == nil || p.cmd.Process == nil {
-		t.Fatal("assertGracefulShutdown: process not running")
+	err := p.signalAndWait(syscall.SIGTERM, 10*time.Second)
+	if err == nil {
+		return
 	}
-	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		if runtime.GOOS == "windows" {
-			t.Skipf("SIGTERM delivery unsupported by Go on windows (%v) — graceful-shutdown proof runs on the Linux CI gate", err)
-		}
-		t.Fatalf("send SIGTERM: %v", err)
+	if strings.HasPrefix(err.Error(), "send signal:") && runtime.GOOS == "windows" {
+		t.Skipf("SIGTERM delivery unsupported by Go on windows (%v) — graceful-shutdown proof runs on the Linux CI gate", err)
 	}
-	done := make(chan error, 1)
-	go func() { done <- p.cmd.Wait() }()
-	select {
-	case err := <-done:
-		p.cmd = nil // already reaped; svcProc.kill (test cleanup) must not Wait() again
-		if err != nil {
-			t.Fatalf("process did not exit cleanly after SIGTERM: %v\nlog:\n%s", err, p.out.String())
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatalf("process did not exit within 10s of SIGTERM\nlog:\n%s", p.out.String())
-	}
+	t.Fatalf("graceful shutdown after SIGTERM failed: %v\nlog:\n%s", err, p.out.String())
 }
