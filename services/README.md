@@ -13,9 +13,15 @@ added [`leaderboard/`](leaderboard/) — the first **consumer**: it consumes Tim
 trackside board over SSE. **Story 1.8** made it **session-aware**: it consumes
 `session.started`/`session.ended`, auto-resets per session (session-keyed standings + a local
 epoch), shows active/finished status, and tolerates out-of-order/replayed events (NFR24). The
-remaining Epic-1 stories grow both services (DLQ, reconnect); the Go blueprint machinery built
-inline in `timing/` (and duplicated in `leaderboard/`) is extracted to `libs/go-pitwall` in
-Epic 2.
+Go blueprint machinery built inline in `timing/` (and duplicated in `leaderboard/`) was
+extracted to `libs/go-pitwall` in **Epic 2**, alongside [`identity/`](identity/) — the
+canonical-`masterId` issuer every other service joins on.
+
+**Epic 3** brought the platform's **second language**: [`driver/`](driver/) is the first
+**Python** service (Story 3.1), built on `libs/py-pitwall` (the Python counterpart of
+`libs/go-pitwall`) and the generated wire DTOs in `contract/codegen/python/`. It ships as a
+skeleton — bus connection, heartbeat, structured logs, graceful shutdown — with racing-profile/
+lap-history domain logic landing in Stories 3.2+.
 
 Planned layout (target — see `architecture.md` §"Target Directory Structure"):
 

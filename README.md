@@ -4,8 +4,8 @@
 check-in, lap timing, the bar, billing, the back office, the public website, and the
 trackside leaderboard — into one coherent whole.
 
-> Status: **design complete, implementation pending.** This repo currently holds the full
-> architecture analysis and the message contract. Code lands service-by-service from here.
+> Status: **in progress.** Epics 1–2 (walking skeleton; canonical identity & check-in) are
+> done and deployed; Epic 3 (Driver, the first Python service) is underway.
 
 A **portfolio / learning project**, built solo, that showcases production-grade
 craftsmanship of a polyglot microservice platform. The karting track is a deliberately
@@ -75,16 +75,22 @@ docs/
 contract/
   schemas/         the envelope + per-event JSON Schemas
   examples/        a worked example per event
+  codegen/         GENERATED wire DTOs (Go: go-jsonschema; Python: datamodel-code-
+                   generator), committed + CI freshness-gated (`make contract`)
 libs/
   go-pitwall/      shared Go blueprint mechanics (envelope, validator, outbox/inbox,
                    messaging supervisor/publisher/Bus/DLQ, relay, heartbeat, erasure
                    scaffold) — extracted from the skeleton, semver'd, replace-pinned
-services/          the polyglot services (each: own Dockerfile, DB, tests)
+  py-pitwall/      shared Python blueprint mechanics (same mechanics, pika-based) —
+                   the Python counterpart, built with the second language (Story 3.1)
+services/          the polyglot services (each: own Dockerfile, DB, tests) — Go
+                   (timing, identity, leaderboard) and Python (driver) so far
 go.work            repo-root Go workspace — LOCAL multi-module dev only (containers
                    build with GOWORK=off via each service's go.mod replace)
 tests/
   contract/        contract-layer validation (pytest against /contract)
-  conformance/     the cross-language conformance harness + e2e smoke (4th gate)
+  conformance/     the cross-language conformance harness + e2e smoke (4th gate);
+                   a Go runner and a Python runner both read the same scenario spec
 CLAUDE.md          operating guide for working in this repo
 ```
 
@@ -97,8 +103,8 @@ Per `docs/analysis/03-engineering-standards.md`, every change passes four layers
 2. **Integration** — real RabbitMQ + DB via testcontainers (per service).
 3. **Contract** — every published/consumed message validated against `/contract`
    (`make contract-test`).
-4. **e2e smoke** — the **cross-language conformance harness** drives the real service binaries
-   against one real RabbitMQ and asserts identical observable bus behavior
+4. **e2e smoke** — the **cross-language conformance harness** drives the real service
+   binaries/processes against one real RabbitMQ and asserts identical observable bus behavior
    (`make smoke`; see [`tests/conformance/`](tests/conformance/)). This is the required merge
    gate; a flaky scenario goes to a non-blocking **quarantine lane**, never `@skip`.
 
@@ -117,8 +123,10 @@ guardrails: [`deploy/README.md`](deploy/README.md).
 - ✅ **Analysis & design** — architecture, ADRs, per-service specs, and the message contract.
 - ✅ **PRD** — capabilities, requirements, NFRs, data governance (decisions back-recorded
   into `docs/analysis` and `/contract`).
-- ⬜ **Implementation** — build order: message bus + Control Room first, then Timing (with
-  its simulator) as the first end-to-end slice, then the rest. See the brief's build order.
+- 🟨 **Implementation** — Epic 1 (walking skeleton: Timing + simulator → Leaderboard, `libs/
+  go-pitwall`) and Epic 2 (Identity, canonical `masterId`, gate check-in) are done and deployed.
+  Epic 3 (Driver — the first Python service, `libs/py-pitwall`, contract codegen for Go +
+  Python) is underway. See the brief's original build order for what's next.
 
 ## Read more
 
