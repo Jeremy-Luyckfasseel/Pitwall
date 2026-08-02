@@ -98,6 +98,29 @@ func TestTxResolver_RedeliveredHeldLookupIsDuplicateNotHeldAgain(t *testing.T) {
 	}
 }
 
+// Review finding (code review 2026-08-02): Resolve must defensively re-normalize the
+// email before hashing, so a caller that (hypothetically) forgot to normalize first
+// still hits the suppression gate — a mismatched hash would silently defeat AC2.
+func TestTxResolver_SuppressedEmailHeldEvenWithUnnormalizedCaseAndWhitespace(t *testing.T) {
+	db, r, es := newResolverWithErasure(t)
+	suppressEmail(t, db, es, "case-erased@example.com")
+
+	// data.Email deliberately NOT pre-normalized here, unlike every other test in this
+	// file — proves Resolve's own defensive NormalizeEmail call, not just the caller's.
+	res, err := r.Resolve(context.Background(),
+		incoming("018f9e2a-7c3d-7b21-9c4e-00000000000a", "  Case-Erased@Example.COM  "),
+		domain.LookupData{RequestID: "aa11bb22-cc33-4dd4-8ee5-ff6677889900", Email: "  Case-Erased@Example.COM  "})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !res.Held {
+		t.Fatalf("res = %+v; want Held=true for a case/whitespace variant of a suppressed email", res)
+	}
+	if n := identityCount(t, db); n != 0 {
+		t.Fatalf("identities = %d; want 0 (never minted)", n)
+	}
+}
+
 // Regression guard (byte-identical pre-2.6 behavior): a lookup for a NEVER-erased email
 // still mints normally through the suppression-gate-equipped resolver.
 func TestTxResolver_NonSuppressedEmailStillMintsNormally(t *testing.T) {

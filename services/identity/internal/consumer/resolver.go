@@ -58,8 +58,11 @@ func (r *TxResolver) Resolve(ctx context.Context, env messaging.IncomingEnvelope
 		// not resolved — never minted, never replied, but never silently dropped either
 		// (durably recorded + the inbox marked so a redelivery dedupes normally next
 		// time). data.Email is already normalized by consumer.go's processLookup before
-		// Resolve is ever called (Round 31 precedent) — do not re-normalize here.
-		emailHash := domain.HashEmail(data.Email)
+		// Resolve is ever called (Round 31 precedent), but NormalizeEmail is idempotent
+		// and cheap — re-apply it defensively so the suppression hash is correct even if
+		// a future caller of Resolve forgets to normalize first (review finding: a
+		// mismatched hash here would silently defeat AC2's resurrection guard).
+		emailHash := domain.HashEmail(domain.NormalizeEmail(data.Email))
 		suppressed, err := r.IsEmailSuppressed(ctx, tx, emailHash)
 		if err != nil {
 			return err

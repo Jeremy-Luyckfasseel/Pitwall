@@ -97,9 +97,11 @@ func (s *enqueueSink) Enqueue(ctx context.Context, tx *sql.Tx, ack messaging.Env
 	if s.fail {
 		return fmt.Errorf("enqueueSink: forced failure")
 	}
-	// Touch the SAME tx the caller is inside (a no-op write against a table that always
-	// exists in the test schema) so a caller that passed a already-committed/rolled-back
-	// tx would fail here, not silently succeed.
+	// Sanity-check that tx is a live, open transaction (a closed/rolled-back tx would
+	// fail this Exec) — a cheap guard against a caller passing a dead handle. This does
+	// NOT by itself prove Enqueue ran in the SAME transaction as Delete/Tombstone; that
+	// atomicity property is what TestHandle_EnqueueFailureRollsBackDeleteAndTombstone
+	// verifies (by checking the delete/tombstone roll back together with a failed Enqueue).
 	if _, err := tx.Exec(`SELECT 1`); err != nil {
 		return fmt.Errorf("enqueueSink: tx not usable: %w", err)
 	}
