@@ -4,7 +4,6 @@
   "title": "privacy.erased (v1) data payload",
   "description": "A per-service acknowledgement that a service has erased or anonymized its local slice for a masterId. Published by EVERY service to its OWN '<service>.events' exchange with routing key 'privacy.erased'; consumed by the Control Room to track erasure completion. (ADR-0009.)",
   "type": "object",
-  "additionalProperties": true,
   "required": ["requestId", "masterId", "service", "mode", "at"],
   "properties": {
     "requestId": {

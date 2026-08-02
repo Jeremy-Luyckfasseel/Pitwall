@@ -4,7 +4,6 @@
   "title": "control / control.heartbeat (v1) data payload",
   "description": "A 1 s liveness signal emitted by EVERY service. Like privacy.erased, it is a cross-cutting event: each service publishes it to its OWN '<service>.events' exchange (the `source` envelope field names the emitter) with routing key 'control.heartbeat'; the Control Room binds a wildcard and aggregates to detect DOWN (3 misses). The 'control' namespace reflects the catalog grouping, not the owning exchange. (Q&A Round 25; ADR-0004 bus-only health.)",
   "type": "object",
-  "additionalProperties": true,
   "required": ["service", "at", "instanceId"],
   "properties": {
     "service": {

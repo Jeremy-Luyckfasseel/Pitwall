@@ -4,7 +4,6 @@
   "title": "privacy.data_provided (v1) data payload",
   "description": "A per-service slice of a data-export bundle. Published by each owning service to its OWN '<service>.events' exchange with routing key 'privacy.data_provided'; consumed by the Control Room which assembles the full export. (ADR-0009.)",
   "type": "object",
-  "additionalProperties": true,
   "required": ["requestId", "masterId", "service", "payload", "at"],
   "properties": {
     "requestId": {
@@ -23,8 +22,7 @@
     },
     "payload": {
       "type": "object",
-      "description": "This service's portion of the subject's personal data. Service-specific; consumers (Control Room) treat it as opaque content.",
-      "additionalProperties": true
+      "description": "This service's portion of the subject's personal data. Service-specific; consumers (Control Room) treat it as opaque content."
     },
     "at": {
       "type": "string",

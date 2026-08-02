@@ -4,7 +4,6 @@
   "title": "frontend / profile.edit_requested (v1) data payload",
   "description": "A driver editing their own profile. Published to the 'frontend.events' exchange with routing key 'profile.edit_requested'; Driver applies racing fields, CRM applies contact + consent. Each consumer updates only the fields it owns. (Q1.5 / Q8.3.)",
   "type": "object",
-  "additionalProperties": true,
   "required": ["requestId", "masterId", "at"],
   "properties": {
     "requestId": {
@@ -19,7 +18,6 @@
     },
     "racing": {
       "type": ["object", "null"],
-      "additionalProperties": true,
       "description": "Driver-owned racing fields (applied by Driver).",
       "properties": {
         "nickname": { "type": "string", "description": "Leaderboard nickname." },
@@ -29,7 +27,6 @@
     },
     "contact": {
       "type": ["object", "null"],
-      "additionalProperties": true,
       "description": "CRM-owned contact fields (applied by CRM).",
       "properties": {
         "legalName": { "type": "string" },
@@ -40,7 +37,6 @@
     },
     "consent": {
       "type": ["object", "null"],
-      "additionalProperties": true,
       "description": "CRM-owned consent flags (applied by CRM).",
       "properties": {
         "marketingConsent": { "type": "boolean" }

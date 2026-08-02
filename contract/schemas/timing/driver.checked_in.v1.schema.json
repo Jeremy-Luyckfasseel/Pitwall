@@ -4,7 +4,6 @@
   "title": "timing / driver.checked_in (v1) data payload",
   "description": "A driver identified at the entry gate (check-in). Published to the 'timing.events' exchange with routing key 'driver.checked_in'. QR codes embed the masterId (read directly, no lookup); transponders carry a hardware id resolved via Timing's local transponder->masterId map.",
   "type": "object",
-  "additionalProperties": true,
   "required": ["masterId", "at", "checkInMethod"],
   "properties": {
     "masterId": {

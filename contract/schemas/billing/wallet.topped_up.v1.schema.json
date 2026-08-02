@@ -4,7 +4,6 @@
   "title": "billing / wallet.topped_up (v1) data payload",
   "description": "Billing (the stored-value ledger system-of-record) CREDITED a wallet after a confirmed load (Round 17, ADR-0011). Published to 'billing.events' with routing key 'wallet.topped_up'; caused by a 'payment.captured'. Consumed by Frontend (account balance read-model), Bar/POS (local balance copy for spend), Control Room. 'balanceAfter' carries the authoritative balance (ECST). Non-taxable load (MPV).",
   "type": "object",
-  "additionalProperties": true,
   "required": ["masterId", "amount", "currency", "balanceAfter", "sourcePaymentId", "at"],
   "properties": {
     "masterId": {

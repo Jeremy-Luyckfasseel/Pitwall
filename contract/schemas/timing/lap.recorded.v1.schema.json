@@ -4,7 +4,6 @@
   "title": "timing / lap.recorded (v1) data payload",
   "description": "A valid crossing of the start-finish line. Published to the 'timing.events' exchange with routing key 'lap.recorded'.",
   "type": "object",
-  "additionalProperties": true,
   "required": ["masterId", "sessionId", "lapNumber", "lapTimeMs", "at"],
   "properties": {
     "masterId": {

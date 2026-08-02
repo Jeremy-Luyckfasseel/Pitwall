@@ -4,7 +4,6 @@
   "title": "timing / session.started (v1) data payload",
   "description": "The ACTUAL (physical) start of a session, emitted by Timing. Published to the 'timing.events' exchange with routing key 'session.started'. Consumers: Booking (reconcile plan vs actual), Leaderboard (auto-reset the board), Billing.",
   "type": "object",
-  "additionalProperties": true,
   "required": ["sessionId", "startedAt"],
   "properties": {
     "sessionId": {

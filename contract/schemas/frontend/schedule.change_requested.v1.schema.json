@@ -4,7 +4,6 @@
   "title": "frontend / schedule.change_requested (v1) data payload",
   "description": "An operator/admin schedule change. Published to the 'frontend.events' exchange with routing key 'schedule.change_requested'; consumed by Booking, which remains the single authority on capacity and applies the change. (ADR-0010.)",
   "type": "object",
-  "additionalProperties": true,
   "required": ["requestId", "action", "adminActor", "at"],
   "properties": {
     "requestId": {
