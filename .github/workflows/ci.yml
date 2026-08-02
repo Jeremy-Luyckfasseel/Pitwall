@@ -205,7 +205,10 @@ jobs:
             docker exec ci-rabbitmq rabbitmq-diagnostics -q ping && exit 0
             sleep 2
           done
-          echo "RabbitMQ did not become ready" >&2; exit 1
+          echo "RabbitMQ did not become ready — container logs:" >&2
+          docker logs ci-rabbitmq >&2 || echo "(container already gone, no logs to show)" >&2
+          docker inspect ci-rabbitmq --format "state={{.State.Status}} exitCode={{.State.ExitCode}} error={{.State.Error}} oomKilled={{.State.OOMKilled}}" >&2 || true
+          exit 1
       - name: Integration tests (real RabbitMQ)
         run: pytest libs/py-pitwall/tests/test_messaging_integration.py
 
