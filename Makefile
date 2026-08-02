@@ -58,11 +58,11 @@ test: ## Go unit tests. Shared lib + each service; integration (real RabbitMQ vi
 	cd services/identity && go build ./... && go vet ./... && go test ./...
 	@echo "Integration tests (need Docker): cd services/<svc> && go test -tags=integration ./test/integration/..."
 
-test-python: ## Python unit tests. pitwall-contract + py-pitwall + Driver; py-pitwall's DLQ/reconnect integration tests need Docker.
+test-python: ## Python unit tests. pitwall-contract + py-pitwall + Driver; py-pitwall's DLQ/reconnect tests and Driver's outbox-relay/inbox integration test need Docker.
 	pip install --quiet -e contract/codegen/python
 	pip install --quiet -e "libs/py-pitwall[test]"
 	pip install --quiet -e "services/driver[test]"
-	python3 -m pytest contract/codegen/python/tests libs/py-pitwall/tests services/driver/tests
+	python3 -m pytest --import-mode=importlib contract/codegen/python/tests libs/py-pitwall/tests services/driver/tests
 
 smoke: ## Go side of the conformance harness + e2e smoke — REQUIRED lane (real binaries + real RabbitMQ via testcontainers; needs Docker)
 	cd tests/conformance/go && go test -tags=integration -timeout 900s ./...
