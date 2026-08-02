@@ -189,3 +189,26 @@ def test_run_with_reconnect_backs_off_and_retries_on_connection_error(monkeypatc
 
     assert len(attempts) == 3
     assert slept == [1.0, 2.0]  # exponential backoff between the two failures
+
+
+def test_run_with_reconnect_retries_on_dns_and_connect_failures(monkeypatch):
+    """A failed hostname lookup (socket.gaierror) or a refused/timed-out TCP connect
+    are both OSError subclasses pika does NOT wrap into one of its own exception types
+    -- found by actually running a built container against a not-yet-resolvable broker
+    hostname, a real race during container orchestration bring-up."""
+    monkeypatch.setattr("pitwall.messaging.time.sleep", lambda s: None)
+
+    attempts = []
+
+    def connect_and_run():
+        attempts.append(1)
+        if len(attempts) == 1:
+            import socket
+
+            raise socket.gaierror("Name or service not known")
+        if len(attempts) == 2:
+            raise ConnectionRefusedError("connection refused")
+
+    run_with_reconnect(connect_and_run, stop=lambda: len(attempts) >= 3, log=MagicMock())
+
+    assert len(attempts) == 3

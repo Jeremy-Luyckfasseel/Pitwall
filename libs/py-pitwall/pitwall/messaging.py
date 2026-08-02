@@ -224,13 +224,22 @@ def run_with_reconnect(
     returns True. connect_and_run is expected to (re)connect, (re)declare topology, and
     block consuming until the connection drops or stop() becomes true (mirrors the Go
     supervisor's re-dial/re-declare/re-subscribe loop, collapsed to one retried callable
-    since pika's BlockingConnection has no separate "swap the live channel" seam)."""
+    since pika's BlockingConnection has no separate "swap the live channel" seam).
+
+    Catches pika's own AMQP-level exceptions AND plain OSError: a failed DNS lookup
+    (socket.gaierror) or a refused/timed-out TCP connect (ConnectionRefusedError,
+    TimeoutError) are both OSError subclasses that pika does NOT wrap into one of its
+    own exception types -- they propagate raw from the underlying socket call. Found by
+    actually running a built container against a broker hostname that was not yet
+    resolvable at startup (a real, common race during Compose/orchestrator bring-up):
+    the original AMQP-only tuple let that crash the whole service instead of retrying,
+    not by inspection."""
     delay = base_delay_s
     while not stop():
         try:
             connect_and_run()
             delay = base_delay_s  # a clean return (stop requested) resets backoff
-        except (AMQPConnectionError, StreamLostError, AMQPError) as e:
+        except (AMQPConnectionError, StreamLostError, AMQPError, OSError) as e:
             log.error("bus connection lost, reconnecting", error=str(e), delaySeconds=delay)
             time.sleep(delay)
             delay = min(delay * 2, max_delay_s)
