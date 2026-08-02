@@ -88,27 +88,30 @@ class Handler:
         for the caller to publish (via the outbox relay); on a redelivery it returns
         duplicate=True and no ack. The caller must have already validated the envelope
         against /contract."""
-        at = format_wire_time(self._now())
-        ack = new_caused_envelope(
-            routing_key=ERASED_TYPE,
-            source=self.service,
-            correlation_id=correlation_id,
-            causation_id=envelope_id,
-            occurred_at=at,
-            data={
-                "requestId": request_id,
-                "masterId": master_id,
-                "service": self.service,
-                "mode": self.mode.value,
-                "at": at,
-            },
-        )
-
         duplicate = False
+        ack = None
         with within_tx(self.db):
             if inbox_has_seen(self.db, envelope_id):
                 duplicate = True
             else:
+                # Built only once we know this isn't a duplicate — a redelivery is the
+                # common, cheap path and should not pay for constructing/validating an
+                # ack envelope it will immediately discard.
+                at = format_wire_time(self._now())
+                ack = new_caused_envelope(
+                    routing_key=ERASED_TYPE,
+                    source=self.service,
+                    correlation_id=correlation_id,
+                    causation_id=envelope_id,
+                    occurred_at=at,
+                    data={
+                        "requestId": request_id,
+                        "masterId": master_id,
+                        "service": self.service,
+                        "mode": self.mode.value,
+                        "at": at,
+                    },
+                )
                 self.delete(self.db, master_id)
                 self.tombstone(self.db, master_id)
                 # Enqueue the ack INSIDE this same transaction so it commits atomically

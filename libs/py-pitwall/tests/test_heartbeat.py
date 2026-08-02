@@ -1,6 +1,7 @@
 import threading
 from datetime import UTC, datetime
 
+import pytest
 from pitwall.heartbeat import Emitter
 
 
@@ -99,6 +100,41 @@ def test_publish_failure_does_not_touch_liveness_file(tmp_path):
 
     assert not liveness.exists()
     assert any("failed to publish" in msg for msg, _ in log.errors)
+
+
+def test_rejects_non_positive_interval():
+    with pytest.raises(ValueError):
+        Emitter(
+            interval_s=0,
+            liveness_file="unused",
+            build=lambda t: _FakeEnvelope({}),
+            validate=lambda env: None,
+            publish=lambda key, body: None,
+            log=_FakeLog(),
+        )
+
+
+def test_invalid_heartbeat_error_log_includes_exception_type(tmp_path):
+    liveness = tmp_path / "live.touch"
+    stop = threading.Event()
+
+    def validate(env):
+        stop.set()
+        raise ValueError("bad envelope")
+
+    log = _FakeLog()
+    emitter = Emitter(
+        interval_s=1000,
+        liveness_file=str(liveness),
+        build=lambda t: _FakeEnvelope({}),
+        validate=validate,
+        publish=lambda key, body: None,
+        log=log,
+        now=lambda: datetime(2026, 6, 2, 14, 3, 21, 512000, tzinfo=UTC),
+    )
+    emitter.run(stop)
+
+    assert any(fields.get("errorType") == "ValueError" for _, fields in log.errors)
 
 
 def test_ticks_multiple_times_before_stop(tmp_path):

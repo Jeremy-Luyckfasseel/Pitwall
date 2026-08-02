@@ -32,6 +32,8 @@ class Emitter:
         log: Any,
         now: Callable[[], datetime] | None = None,
     ):
+        if interval_s <= 0:
+            raise ValueError(f"Emitter interval_s must be positive, got {interval_s}")
         self._interval_s = interval_s
         self._liveness_file = liveness_file
         self._build = build
@@ -55,15 +57,20 @@ class Emitter:
         try:
             self._validate(env)
         except Exception as e:
-            # Blueprint: invalid out -> log + drop, never publish.
-            self._log.error("dropping invalid heartbeat (failed /contract validation)", error=str(e))
+            # Blueprint: invalid out -> log + drop, never publish. Build/Validate/Publish
+            # are injected callables (mirrors Go's generic error-return contract), so the
+            # exception type is unknown ahead of time; catch broadly but log the concrete
+            # class so a genuine bug doesn't masquerade as an ordinary validation failure.
+            self._log.error(
+                "dropping invalid heartbeat (failed /contract validation)", error=str(e), errorType=type(e).__name__
+            )
             return
 
         body = env.model_dump_json(by_alias=True, exclude_none=False).encode("utf-8")
         try:
             self._publish(HEARTBEAT_ROUTING_KEY, body)
         except Exception as e:
-            self._log.error("failed to publish heartbeat", error=str(e))
+            self._log.error("failed to publish heartbeat", error=str(e), errorType=type(e).__name__)
             return
 
         try:
