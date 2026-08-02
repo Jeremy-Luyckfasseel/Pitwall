@@ -11,6 +11,7 @@ require (
 )
 
 require (
+	github.com/Jeremy-Luyckfasseel/Pitwall/contract/codegen/go v0.0.0
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
@@ -25,3 +26,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/Jeremy-Luyckfasseel/Pitwall/contract/codegen/go => ../../contract/codegen/go
