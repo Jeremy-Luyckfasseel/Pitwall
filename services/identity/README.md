@@ -29,13 +29,34 @@ There is **no `isNew` flag** — consumers idempotently upsert on the returned `
 | Direction | Routing key | Exchange (physical) | Notes |
 |---|---|---|---|
 | **Consumes** | `identity.lookup_requested` | `frontend.events` (the **originating** service's exchange — Q&A Round 30; later also `bar.events` for counter walk-ins, Epic 7) | bound via a durable queue `identity.lookup-requested` |
+| **Consumes** | `privacy.erasure_requested` | `frontend.events` | bound on the SAME queue as the lookup (one queue carries both intents; they share the same producer exchange) |
 | **Publishes** | `identity.resolved` | `identity.events` (its **own**) | sent durably via the outbox + confirm-relay |
+| **Publishes** | `privacy.erased` | `identity.events` (its **own**) | sent durably via the SAME outbox + confirm-relay (Story 2.6) |
 | **Publishes** | `control.heartbeat` | `identity.events` | 1 s liveness (ADR-0004) |
 
 Identity is the first service that is **both a consumer and an outbox-backed producer**:
 a consumer Bus binds `frontend.events` (and publishes the heartbeat), while a confirm
-publisher drives the outbox relay that publishes `identity.resolved`. Both declare
-`identity.events` idempotently.
+publisher drives the outbox relay that publishes `identity.resolved` and `privacy.erased`.
+Both declare `identity.events` idempotently.
+
+## Erasure & the email-hash tombstone (Story 2.6, DG-3/DG-7)
+
+Identity is the first service to wire [`libs/go-pitwall/erasure`](../../libs/go-pitwall/erasure)'s
+reusable inbox-dedupe → delete-slice → tombstone → atomic ack pipeline into a real domain.
+A validated `privacy.erasure_requested {masterId}` deletes the `identities` row for that
+`masterId`, records a durable tombstone (`identity_tombstones`), and durably enqueues
+`privacy.erased {requestId, masterId, service:"identity", mode:"deleted", at}` to the
+SAME outbox `identity.resolved` uses — all atomically, so the ack can never be silently
+lost.
+
+Because Identity's own slice **is** the email↔`masterId` mapping, a full delete alone
+would let a later lookup for the same address silently mint a brand-new identity —
+undoing the erasure (Round 33/Q33.1). So the erased email's normalized form is hashed
+(irreversible SHA-256, never the plaintext) into a small suppression table
+(`email_suppressions`) before the row is deleted. A later `identity.lookup_requested`
+for a suppressed email is **held**: durably persisted (`held_lookups`, never dropped) and
+logged at alert severity, but never minted and never replied to — the exact "hold +
+persist + flag" shape Story 2.5 established for its own unknown-token exception.
 
 ## Idempotency (two independent guarantees)
 
@@ -58,6 +79,20 @@ The resolve-or-mint + the `identity.resolved` outbox-enqueue + the inbox-mark co
 | **RabbitMQ down** | Lookups redeliver on reconnect; the reply is committed to the outbox and the relay publishes it on reconnect (retry-forever + supervisor). |
 | **Malformed lookup** (bad/missing email or requestId) | Validate-on-consume fails → log + **park** (DLQ); no `identity.resolved` emitted, never silently dropped. |
 | **Service restart** | Durable store + inbox + outbox; replays unprocessed lookups; idempotent. |
+| **Erasure request for a live `masterId`** | Delete + tombstone + `privacy.erased` ack, all atomic. |
+| **Lookup for an email suppressed by a prior erasure** | Held + persisted (`held_lookups`) + logged at alert severity; never minted, never replied. |
+| **A second erasure request for an already-erased `masterId`** (different envelope id) | Graceful no-op delete (idempotent), a harmless duplicate `privacy.erased` ack. |
+
+## Layout
+
+- `internal/persistence/erasure_store.go` — `ErasureStore`: delete-slice + email-hash
+  suppression + tombstone, all tx-scoped (Story 2.6).
+- `internal/persistence/held_lookup_store.go` — `HeldLookupStore`: the durable "held,
+  never dropped" sink for a suppressed-email lookup.
+- `internal/persistence/migrations/0002_erasure.sql` — `identity_tombstones`,
+  `email_suppressions`, `held_lookups`.
+- `internal/domain/erasure.go` — `HashEmail`: pure SHA-256 hash of an already-normalized
+  email.
 
 ## Run / test
 

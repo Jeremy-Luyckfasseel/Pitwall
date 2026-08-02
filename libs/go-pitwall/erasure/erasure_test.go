@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -83,12 +84,42 @@ func incomingRequest(t *testing.T, envID, requestID, masterID string) messaging.
 	return in
 }
 
+// enqueueSink is a test double for the atomic ack-enqueue callback: it records every
+// envelope handed to it, together with whether it ran inside a live transaction (tx
+// operations after a rollback fail, so a bogus tx would surface as an Exec error in the
+// caller, not silently succeed).
+type enqueueSink struct {
+	acks []messaging.Envelope
+	fail bool // if true, Enqueue returns an error (used to prove the whole tx rolls back)
+}
+
+func (s *enqueueSink) Enqueue(ctx context.Context, tx *sql.Tx, ack messaging.Envelope) error {
+	if s.fail {
+		return fmt.Errorf("enqueueSink: forced failure")
+	}
+	// Sanity-check that tx is a live, open transaction (a closed/rolled-back tx would
+	// fail this Exec) — a cheap guard against a caller passing a dead handle. This does
+	// NOT by itself prove Enqueue ran in the SAME transaction as Delete/Tombstone; that
+	// atomicity property is what TestHandle_EnqueueFailureRollsBackDeleteAndTombstone
+	// verifies (by checking the delete/tombstone roll back together with a failed Enqueue).
+	if _, err := tx.Exec(`SELECT 1`); err != nil {
+		return fmt.Errorf("enqueueSink: tx not usable: %w", err)
+	}
+	s.acks = append(s.acks, ack)
+	return nil
+}
+
 func newHandler(db *sql.DB) *Handler {
+	return newHandlerWithSink(db, &enqueueSink{})
+}
+
+func newHandlerWithSink(db *sql.DB, sink *enqueueSink) *Handler {
 	return &Handler{
 		DB:        db,
 		Service:   "driver",
 		Delete:    deleteThing,
 		Tombstone: writeTombstone,
+		Enqueue:   sink.Enqueue,
 		Now:       func() time.Time { return time.Date(2026, 6, 1, 11, 30, 2, 140_000_000, time.UTC) },
 	}
 }
@@ -139,14 +170,18 @@ func TestHandle_IdempotentOnRedelivery(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO things (master_id, payload) VALUES (?, 'pii')`, fixtureMaster); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	h := newHandler(db)
+	sink := &enqueueSink{}
+	h := newHandlerWithSink(db, sink)
 	in := incomingRequest(t, fixtureRequest, fixtureRequest, fixtureMaster)
 
 	if _, err := h.Handle(context.Background(), in); err != nil {
 		t.Fatalf("first Handle: %v", err)
 	}
 	deletes := 0
-	h.Delete = func(ctx context.Context, tx *sql.Tx, masterID string) error { deletes++; return deleteThing(ctx, tx, masterID) }
+	h.Delete = func(ctx context.Context, tx *sql.Tx, masterID string) error {
+		deletes++
+		return deleteThing(ctx, tx, masterID)
+	}
 	res, err := h.Handle(context.Background(), in)
 	if err != nil {
 		t.Fatalf("second Handle: %v", err)
@@ -156,6 +191,64 @@ func TestHandle_IdempotentOnRedelivery(t *testing.T) {
 	}
 	if deletes != 0 {
 		t.Fatalf("delete ran %d times on a duplicate; want 0", deletes)
+	}
+	if len(sink.acks) != 1 {
+		t.Fatalf("Enqueue called %d times across first+redelivered Handle; want 1 (no second ack)", len(sink.acks))
+	}
+}
+
+// AC1 (Story 2.6): the ack must be enqueued ATOMICALLY with the delete + tombstone —
+// not returned for the caller to enqueue in a separate transaction afterward (that
+// shape would let a crash between Handle returning and the caller's own enqueue
+// permanently lose the ack, since the inbox is already marked seen by then).
+func TestHandle_EnqueuesAckAtomicallyWithDeleteAndTombstone(t *testing.T) {
+	db := openDB(t)
+	if _, err := db.Exec(`INSERT INTO things (master_id, payload) VALUES (?, 'pii')`, fixtureMaster); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	sink := &enqueueSink{}
+	h := newHandlerWithSink(db, sink)
+
+	res, err := h.Handle(context.Background(), incomingRequest(t, fixtureRequest, fixtureRequest, fixtureMaster))
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(sink.acks) != 1 {
+		t.Fatalf("Enqueue called %d times; want 1", len(sink.acks))
+	}
+	if sink.acks[0].ID != res.Ack.ID || sink.acks[0].Type != ErasedType {
+		t.Fatalf("enqueued ack = %+v; want the returned ack %+v", sink.acks[0], res.Ack)
+	}
+}
+
+// AC1 (Story 2.6): if the atomic enqueue fails, the WHOLE transaction rolls back — the
+// delete and the tombstone must NOT persist either, so a retry re-attempts cleanly
+// instead of leaving a half-erased slice with no ack ever sent.
+func TestHandle_EnqueueFailureRollsBackDeleteAndTombstone(t *testing.T) {
+	db := openDB(t)
+	if _, err := db.Exec(`INSERT INTO things (master_id, payload) VALUES (?, 'pii')`, fixtureMaster); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	sink := &enqueueSink{fail: true}
+	h := newHandlerWithSink(db, sink)
+
+	if _, err := h.Handle(context.Background(), incomingRequest(t, fixtureRequest, fixtureRequest, fixtureMaster)); err == nil {
+		t.Fatal("Handle must fail when Enqueue fails")
+	}
+
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM things WHERE master_id = ?`, fixtureMaster).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("slice deleted despite Enqueue failure: %d rows remain; want 1 (rolled back)", n)
+	}
+	blocked, err := checker(db)(context.Background(), fixtureMaster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked {
+		t.Fatal("tombstone written despite Enqueue failure; want rolled back")
 	}
 }
 

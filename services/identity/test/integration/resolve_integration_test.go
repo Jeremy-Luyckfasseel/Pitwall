@@ -25,6 +25,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 
+	goperasure "github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/erasure"
 	librelay "github.com/Jeremy-Luyckfasseel/Pitwall/libs/go-pitwall/relay"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/identity/internal/consumer"
 	"github.com/Jeremy-Luyckfasseel/Pitwall/services/identity/internal/domain"
@@ -197,6 +198,33 @@ func (r *identityRig) identityCount(t *testing.T) int {
 	return n
 }
 
+func (r *identityRig) tombstoneCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := r.db.QueryRow(`SELECT COUNT(*) FROM identity_tombstones`).Scan(&n); err != nil {
+		t.Fatalf("count identity_tombstones: %v", err)
+	}
+	return n
+}
+
+func (r *identityRig) suppressionCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := r.db.QueryRow(`SELECT COUNT(*) FROM email_suppressions`).Scan(&n); err != nil {
+		t.Fatalf("count email_suppressions: %v", err)
+	}
+	return n
+}
+
+func (r *identityRig) heldLookupCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := r.db.QueryRow(`SELECT COUNT(*) FROM held_lookups`).Scan(&n); err != nil {
+		t.Fatalf("count held_lookups: %v", err)
+	}
+	return n
+}
+
 func startIdentity(t *testing.T, amqpURL, dbPath string) *identityRig {
 	t.Helper()
 	dir, err := messaging.ResolveContractDir("")
@@ -213,6 +241,8 @@ func startIdentity(t *testing.T, amqpURL, dbPath string) *identityRig {
 	}
 	store := persistence.NewStore(db)
 	outbox := persistence.NewOutboxStore(db)
+	erasureStore := persistence.NewErasureStore()
+	heldStore := persistence.NewHeldLookupStore()
 
 	consumerBus, err := messaging.DialConsumer(amqpURL, messaging.IdentityExchange)
 	if err != nil {
@@ -236,16 +266,46 @@ func startIdentity(t *testing.T, amqpURL, dbPath string) *identityRig {
 		MintID:      uuid.NewString,
 		Source:      "identity",
 		ResolvedKey: messaging.ResolvedRoutingKey,
+		IsEmailSuppressed: func(ctx context.Context, tx *sql.Tx, emailHash string) (bool, error) {
+			return erasureStore.IsEmailSuppressed(ctx, tx, emailHash)
+		},
+		RecordHeld: func(ctx context.Context, tx *sql.Tx, requestID, emailHash, occurredAt, recordedAt string) error {
+			return heldStore.Record(ctx, tx, requestID, emailHash, "email suppressed by prior erasure", occurredAt, recordedAt)
+		},
+	}
+	erasureHandler := &goperasure.Handler{
+		DB:      db,
+		Service: "identity",
+		Mode:    goperasure.ModeDeleted,
+		Delete: func(ctx context.Context, tx *sql.Tx, masterID string) error {
+			email, found, err := erasureStore.LookupEmail(ctx, tx, masterID)
+			if err != nil {
+				return err
+			}
+			if !found {
+				return nil
+			}
+			hash := domain.HashEmail(domain.NormalizeEmail(email))
+			return erasureStore.DeleteSlice(ctx, tx, masterID, hash, messaging.FormatWireTime(time.Now()))
+		},
+		Tombstone: func(ctx context.Context, tx *sql.Tx, masterID string) error {
+			return erasureStore.WriteTombstone(ctx, tx, masterID, messaging.FormatWireTime(time.Now()))
+		},
+		Enqueue: func(ctx context.Context, tx *sql.Tx, ack messaging.Envelope) error {
+			return librelay.EnqueueEnvelope(tx, outbox, validator.ValidateEnvelopeBytes, ack)
+		},
 	}
 	handler := &consumer.Handler{
-		Validate:  validator.ValidateEnvelopeBytes,
-		Resolver:  resolver,
-		Log:       quietLog(),
-		Notify:    relay.Kick,
-		LookupKey: messaging.LookupRequestedRoutingKey,
-		Policy:    domain.DLQPolicy{MaxAttempts: 5, BaseMs: 50, Multiplier: 2, MaxMs: 1000},
-		Retry:     consumerBus.RetryToDLX,
-		Park:      consumerBus.ParkToDLX,
+		Validate:   validator.ValidateEnvelopeBytes,
+		Resolver:   resolver,
+		Erasure:    erasureHandler,
+		Log:        quietLog(),
+		Notify:     relay.Kick,
+		LookupKey:  messaging.LookupRequestedRoutingKey,
+		ErasureKey: goperasure.ErasureRequestedType,
+		Policy:     domain.DLQPolicy{MaxAttempts: 5, BaseMs: 50, Multiplier: 2, MaxMs: 1000},
+		Retry:      consumerBus.RetryToDLX,
+		Park:       consumerBus.ParkToDLX,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -256,7 +316,7 @@ func startIdentity(t *testing.T, amqpURL, dbPath string) *identityRig {
 	deliveries, err := consumerBus.ConnectAndConsume(ctx, messaging.ConsumerOptions{
 		SourceExchange: frontendExchange,
 		QueueName:      lookupQueueIT,
-		RoutingKeys:    []string{messaging.LookupRequestedRoutingKey},
+		RoutingKeys:    []string{messaging.LookupRequestedRoutingKey, goperasure.ErasureRequestedType},
 		Prefetch:       16,
 		DLXExchange:    messaging.IdentityDLXExchange,
 	}, quietLog(), func(bool) {})
