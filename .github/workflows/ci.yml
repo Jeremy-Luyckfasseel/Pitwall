@@ -198,29 +198,32 @@ jobs:
       - name: Unit tests (broker-free)
         run: pytest libs/py-pitwall/tests --deselect libs/py-pitwall/tests/test_messaging_integration.py
       - name: Start RabbitMQ (real-broker DLQ/reconnect integration tests)
-        # --tmpfs /var/lib/rabbitmq: the image declares that path as a VOLUME: Docker
-        # allocates an anonymous volume for it on every run, and on this runner that
-        # volume's underlying overlay storage consistently comes back with permissions
-        # the container's non-root rabbitmq user cannot read ("Error when reading
-        # /var/lib/rabbitmq/.erlang.cookie: eacces", crashing the broker within
-        # seconds of every start — confirmed via CI-only diagnostic logging, and NOT
-        # fixed by setting RABBITMQ_ERLANG_COOKIE explicitly, which was tried first and
-        # still failed identically). A tmpfs mount gets fresh, correctly-owned storage
-        # from the kernel instead of Docker's volume driver, sidestepping whatever is
-        # wrong with this runner's overlay setup — verified locally (Server startup
-        # complete, clean ping) before landing. Every OTHER job in this workflow using
-        # the same image via testcontainers was unaffected (different startup path).
-        run: docker run -d --name ci-rabbitmq -p 5672:5672 --tmpfs /var/lib/rabbitmq rabbitmq:4.3-management-alpine
-      - name: Wait for RabbitMQ
+        # Via testcontainers, not a bare `docker run`: a bare `docker run -d --name
+        # ci-rabbitmq -p 5672:5672 rabbitmq:4.3-management-alpine` (± RABBITMQ_ERLANG_
+        # COOKIE, ± --tmpfs /var/lib/rabbitmq — both tried and both failed identically)
+        # consistently crashed on this runner within seconds with "Error when reading
+        # /var/lib/rabbitmq/.erlang.cookie: eacces" during Erlang distribution
+        # prelaunch, confirmed via CI-only diagnostic logging across three separate
+        # attempts. Every OTHER job in this workflow using the identical image via
+        # testcontainers (driver-python, e2e-smoke-python, tests/conformance/python)
+        # passes reliably, so rather than keep reverse-engineering exactly which
+        # container option testcontainers sets that avoids the crash, this job now
+        # just uses the same proven mechanism: start the container here, export its
+        # connection URL as PITWALL_TEST_AMQP_URL (test_messaging_integration.py
+        # already reads that env var, unchanged), and leave the container running for
+        # the next step (testcontainers' Ryuk sidecar reaps it when the job's Docker
+        # session ends — no explicit stop needed).
         run: |
-          for i in $(seq 1 30); do
-            docker exec ci-rabbitmq rabbitmq-diagnostics -q ping && exit 0
-            sleep 2
-          done
-          echo "RabbitMQ did not become ready — container logs:" >&2
-          docker logs ci-rabbitmq >&2 || echo "(container already gone, no logs to show)" >&2
-          docker inspect ci-rabbitmq --format "state={{.State.Status}} exitCode={{.State.ExitCode}} error={{.State.Error}} oomKilled={{.State.OOMKilled}}" >&2 || true
-          exit 1
+          python3 -c "
+          from testcontainers.community.rabbitmq import RabbitMqContainer
+          c = RabbitMqContainer('rabbitmq:4.3-management-alpine')
+          c.start()
+          p = c.get_connection_params()
+          url = f'amqp://{p.credentials.username}:{p.credentials.password}@{p.host}:{p.port}{p.virtual_host}'
+          with open('$GITHUB_ENV', 'a') as f:
+              f.write(f'PITWALL_TEST_AMQP_URL={url}\n')
+          print(f'RabbitMQ ready at {p.host}:{p.port}')
+          "
       - name: Integration tests (real RabbitMQ)
         run: pytest libs/py-pitwall/tests/test_messaging_integration.py
 
