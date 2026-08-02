@@ -33,7 +33,6 @@
     },
     "occurredAt": {
       "type": "string",
-      "format": "date-time",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
       "description": "When the fact happened. RFC3339 UTC, exactly 3-digit milliseconds, literal 'Z' (never '+00:00')."
     },

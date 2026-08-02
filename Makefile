@@ -2,7 +2,7 @@
 # Targets grow as the platform does (walking-skeleton-first). Recipes are POSIX sh; run on
 # Linux / macOS / WSL / git-bash (the CI runners and the VPS).
 .DEFAULT_GOAL := help
-.PHONY: help up down clean logs contract-test contract test smoke smoke-quarantine prod-config
+.PHONY: help up down clean logs contract-test contract contract-freshness test smoke smoke-quarantine prod-config
 
 help: ## Show this help
 	@echo "Pitwall make targets:"
@@ -43,8 +43,12 @@ contract-test: ## Run the contract gates (schema-lint + example validation + kno
 	bash scripts/check-corpus-coherence.sh
 	python3 -m pytest tests/contract
 
-contract: ## (placeholder) Wire-DTO codegen — introduced with the 2nd language (Epic 2 / AR15 step 4)
-	@echo "make contract: nothing to generate yet — codegen arrives with the 2nd language (Epic 2 / AR15 step 4)."
+contract: ## Generate wire DTOs from /contract (Go: go-jsonschema) into contract/codegen/, committed + CI freshness-gated
+	sh scripts/generate-contract-go.sh
+
+contract-freshness: ## Freshness gate: regenerate contract/codegen and fail if committed output is stale
+	$(MAKE) contract
+	git diff --exit-code -- contract/codegen
 
 test: ## Go unit tests. Shared lib + each service; integration (real RabbitMQ via testcontainers) needs Docker.
 	cd libs/go-pitwall && go build ./... && go vet ./... && go test ./...

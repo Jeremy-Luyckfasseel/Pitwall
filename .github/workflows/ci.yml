@@ -32,6 +32,7 @@ jobs:
               - 'scripts/check-schema-lint.py'
               - 'scripts/validate-contract.py'
               - 'scripts/check-invalid-fixtures.py'
+              - 'scripts/generate-contract-go.sh'
               - 'tests/contract/**'
               - 'pytest.ini'
             services:
@@ -107,6 +108,32 @@ jobs:
       - run: python -m pip install --quiet jsonschema pytest
       - name: pytest — exhaustive contract validation
         run: python -m pytest tests/contract
+
+  contract-codegen-freshness:
+    # Story 3.1 (AC1): wire DTOs are code-generated from /contract into contract/codegen/
+    # and committed (reviewable diffs, offline-reproducible). This gate regenerates them
+    # and fails the build if the committed output is stale — the freshness gate is what
+    # makes "generated output is committed" trustworthy instead of aspirational.
+    needs: changes
+    if: ${{ needs.changes.outputs.contract == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+      - name: Regenerate contract/codegen and fail on drift
+        run: |
+          sh scripts/generate-contract-go.sh
+          git diff --exit-code -- contract/codegen
+      - name: Build + vet + test the generated Go module (round-trip fixtures)
+        working-directory: contract/codegen/go
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./...
 
   libs-go:
     # The shared Go blueprint library (libs/go-pitwall, Story 2.1): build + vet + unit
