@@ -198,7 +198,16 @@ jobs:
       - name: Unit tests (broker-free)
         run: pytest libs/py-pitwall/tests --deselect libs/py-pitwall/tests/test_messaging_integration.py
       - name: Start RabbitMQ (real-broker DLQ/reconnect integration tests)
-        run: docker run -d --name ci-rabbitmq -p 5672:5672 rabbitmq:4.3-management-alpine
+        # RABBITMQ_ERLANG_COOKIE is set explicitly: without it, the image's entrypoint
+        # auto-generates /var/lib/rabbitmq/.erlang.cookie and chmods it — a step that
+        # races/fails under this runner's container conditions ("Error when reading
+        # /var/lib/rabbitmq/.erlang.cookie: eacces", a well-documented issue with the
+        # official image), crashing the broker within seconds of every start. Setting
+        # the cookie ourselves skips that generation step entirely. Found via CI-only
+        # diagnostic logging (docker logs on failure) after the container crashed
+        # silently in this job specifically — every OTHER job in this workflow using
+        # the same image via testcontainers was unaffected (different startup path).
+        run: docker run -d --name ci-rabbitmq -p 5672:5672 -e RABBITMQ_ERLANG_COOKIE=ci-test-cookie rabbitmq:4.3-management-alpine
       - name: Wait for RabbitMQ
         run: |
           for i in $(seq 1 30); do
