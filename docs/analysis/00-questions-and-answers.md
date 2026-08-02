@@ -1407,3 +1407,34 @@ address mint a brand-new `masterId` with no special handling) — simpler and ne
 not satisfy AC2's literal wording ("a late/replayed lookup... would re-mint it... the tombstone is honored"),
 and would let an erased person's email silently become live again with zero record that erasure ever
 happened for that address, undermining the audit trail ADR-0009/Q16.6 requires for privacy actions.
+
+## Round 34 — Story 3.1 Python skeleton: FastAPI's role & AMQP concurrency model (2026-08-02)
+
+> Surfaced while drafting **Story 3.1** (Python service skeleton, `make contract` codegen, `libs/py-pitwall`).
+> The architecture doc's tech-stack table names "Python 3.14.x (FastAPI 0.136.x / Pydantic v2)" for the
+> records tier, but CLAUDE.md §2 rule 2 forbids HTTP `/health` endpoints and rule 1 forbids inter-service
+> HTTP entirely — Driver has no HTTP surface of any kind. Nothing in the architecture doc or Q&A explains
+> what FastAPI is actually *for* on a bus-only service, and no round picked the AMQP client's concurrency
+> model (sync vs asyncio) for the Python blueprint. Not answered anywhere → asked per the golden rule
+> (CLAUDE.md §0). Jeremy deferred to the dev agent's recommendation on both. **No new ADR** — these are
+> build-config/library choices within the already-ratified Python tier (Q19.4), not new architectural
+> decisions.
+
+**Q34.1 — What is FastAPI's actual role in a Python service that never serves HTTP?**
+A: **Pydantic v2 only — no FastAPI runtime.** `libs/py-pitwall` and Driver depend on `pydantic` directly
+(the piece Q19.4/architecture actually needs — DTOs, envelope models, validator ergonomics) and do **not**
+instantiate a `FastAPI()` app or run `uvicorn`. FastAPI stays an available-but-unused transitive capability
+for if/when a Python service ever legitimately needs an HTTP surface (none do today; every non-negotiable
+in CLAUDE.md §2 forbids it for inter-service and health purposes). *Rejected:* mounting a bare `FastAPI()`
+app with zero registered routes just to have the framework "in use" — technically matches the architecture
+table's wording but adds a live ASGI app + a second process/thread (uvicorn) with no caller and no purpose,
+pure ceremony for a bus-only service.
+
+**Q34.2 — What concurrency model should the Python blueprint's AMQP connection use?**
+A: **Sync, blocking (`pika`).** Mirrors the Go services' one-goroutine-per-queue blocking-consumer mental
+model (Timing/Identity since Epic 1), which the whole platform's messaging/outbox/inbox/DLQ design already
+assumes (process one message, ack, move on — no concurrent-delivery reasoning needed). Simpler to test and
+reason about for a solo build; avoids threading async/await through outbox, inbox, heartbeat, and erasure
+mechanics for zero current benefit (no Python service has a latency/throughput need that requires asyncio).
+*Rejected:* `aio-pika`/asyncio — would fit better if FastAPI were actually serving async HTTP (Q34.1 rules
+that out) and adds real complexity (async DB access, async test fixtures) with no offsetting requirement.
