@@ -212,10 +212,21 @@ class Bus:
         """Routes a message terminally to the parking queue with a reason."""
         self.publish_to_dlx(PARK_ROUTING_KEY, body, park_reason=reason)
 
-    def consume(self, queue_name: str) -> Iterator[Delivery]:
+    def consume(self, queue_name: str, inactivity_timeout: float | None = None) -> Iterator[Delivery | None]:
         """Yields deliveries from queue_name with manual-ack discipline (the caller
-        acks only after the local state change durably commits, NFR6)."""
-        for method, properties, body in self._channel.consume(queue_name, auto_ack=False):
+        acks only after the local state change durably commits, NFR6). When
+        inactivity_timeout is set, a quiet period with no message yields a plain
+        None (pika's own convention: channel.consume() emits (None, None, None) on
+        an inactivity tick) so a caller can periodically check a shutdown signal
+        without blocking indefinitely on the next message. Omitted/None (the
+        default) blocks per message exactly as before -- no behavior change for
+        existing callers."""
+        for method, properties, body in self._channel.consume(
+            queue_name, auto_ack=False, inactivity_timeout=inactivity_timeout
+        ):
+            if method is None:
+                yield None
+                continue
             yield Delivery(
                 body=body,
                 retry_count=_parse_retry_count(properties.headers),

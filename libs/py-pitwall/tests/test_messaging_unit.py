@@ -179,6 +179,32 @@ def test_declare_dlq_topology_binds_one_queue_to_multiple_source_exchanges():
     ch.basic_qos.assert_called_once_with(prefetch_count=16)
 
 
+def test_consume_yields_none_on_an_inactivity_timeout_tick():
+    """Story 3.2's consumer thread needs to periodically wake up (with no message
+    available) to check its own shutdown signal -- pika's own convention for this is
+    yielding (None, None, None) from channel.consume() when inactivity_timeout
+    elapses. Bus.consume must surface that as a plain None, not attempt to build a
+    Delivery from it."""
+    bus = Bus("amqp://localhost", "driver.events")
+    ch = MagicMock()
+    bus._channel = ch
+
+    method = MagicMock()
+    method.delivery_tag = 1
+    ch.consume.return_value = iter(
+        [
+            (None, None, None),  # inactivity tick
+            (method, MagicMock(headers=None), b"payload"),
+        ]
+    )
+
+    results = list(bus.consume("driver.profile-safety-net", inactivity_timeout=1.0))
+
+    ch.consume.assert_called_once_with("driver.profile-safety-net", auto_ack=False, inactivity_timeout=1.0)
+    assert results[0] is None
+    assert results[1].body == b"payload"
+
+
 def test_retry_to_dlx_carries_backoff_ttl_and_headers():
     bus = Bus("amqp://localhost", "driver.events")
     ch = MagicMock()
