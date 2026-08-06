@@ -140,6 +140,12 @@ class Bus:
             raise ValueError("declare_dlq_topology: ConsumerOptions.dlx_exchange must be set")
         if not opts.bindings:
             raise ValueError("declare_dlq_topology: ConsumerOptions.bindings must have at least one entry")
+        for binding in opts.bindings:
+            if not binding.routing_keys:
+                raise ValueError(
+                    f"declare_dlq_topology: Binding for {binding.source_exchange!r} has no routing_keys "
+                    "(would declare the exchange but bind nothing)"
+                )
         ch = self._channel
         retry_q = retry_queue_name(opts.queue_name)
         parking_q = parking_queue_name(opts.queue_name)

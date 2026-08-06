@@ -112,6 +112,22 @@ def test_declare_dlq_topology_requires_at_least_one_binding():
         bus.declare_dlq_topology(opts)
 
 
+def test_declare_dlq_topology_requires_non_empty_routing_keys_per_binding():
+    """A Binding with empty routing_keys would declare its exchange but bind nothing --
+    a silent misconfiguration (that producer's events would never reach the queue, with
+    no error). Caught at declare time instead."""
+    bus = Bus("amqp://localhost", "driver.events")
+    bus._channel = MagicMock()
+    opts = ConsumerOptions(
+        bindings=[Binding(source_exchange="timing.events", routing_keys=[])],
+        queue_name="driver.lookup",
+        prefetch=16,
+        dlx_exchange="driver.dlx",
+    )
+    with pytest.raises(ValueError, match="routing_keys"):
+        bus.declare_dlq_topology(opts)
+
+
 def test_declare_dlq_topology_declares_full_topology():
     bus = Bus("amqp://localhost", "driver.events")
     ch = MagicMock()
