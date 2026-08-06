@@ -180,50 +180,56 @@ def main() -> int:
         whether the main bus's connection is still healthy."""
 
         def connect_and_consume() -> None:
+            # consumer_bus.close() must run on EVERY exit path from this point on,
+            # including a failure inside connect()/declare_dlq_topology() itself --
+            # otherwise a persistent topology mismatch leaks one connection per
+            # run_with_reconnect retry attempt.
             consumer_bus = Bus(amqp_url, DRIVER_EXCHANGE)
-            consumer_bus.connect()
-            consumer_bus.declare_dlq_topology(
-                ConsumerOptions(
-                    bindings=[
-                        Binding(source_exchange=cfg.timing_exchange, routing_keys=[LAP_RECORDED_TYPE]),
-                        Binding(source_exchange=cfg.identity_exchange, routing_keys=[IDENTITY_RESOLVED_TYPE]),
-                    ],
-                    queue_name=CONSUMER_QUEUE,
-                    prefetch=cfg.consume_prefetch,
-                    dlx_exchange=CONSUMER_DLX,
-                )
-            )
-            log.info(
-                "consumer queue declared", queue=CONSUMER_QUEUE, timingExchange=cfg.timing_exchange,
-                identityExchange=cfg.identity_exchange,
-            )
-
-            # Own SQLite connection, same cross-thread reason as run_relay's.
-            conn = open_db(cfg.db_path)
             try:
-                handler = Handler(
-                    validate=validator.validate_envelope_bytes,
-                    conn=conn,
-                    source=cfg.service_name,
-                    policy=Policy(
-                        max_attempts=cfg.dlq_max_attempts,
-                        base_ms=cfg.dlq_retry_base_ms,
-                        multiplier=cfg.dlq_retry_multiplier,
-                        max_ms=cfg.dlq_retry_max_ms,
-                    ),
-                    log=log,
-                    retry=consumer_bus.retry_to_dlx,
-                    park=consumer_bus.park_to_dlx,
-                    notify=notify_relay,
+                consumer_bus.connect()
+                consumer_bus.declare_dlq_topology(
+                    ConsumerOptions(
+                        bindings=[
+                            Binding(source_exchange=cfg.timing_exchange, routing_keys=[LAP_RECORDED_TYPE]),
+                            Binding(source_exchange=cfg.identity_exchange, routing_keys=[IDENTITY_RESOLVED_TYPE]),
+                        ],
+                        queue_name=CONSUMER_QUEUE,
+                        prefetch=cfg.consume_prefetch,
+                        dlx_exchange=CONSUMER_DLX,
+                    )
                 )
-                for delivery in consumer_bus.consume(CONSUMER_QUEUE, inactivity_timeout=_CONNECTION_POLL_S):
-                    if cycle_stop.is_set():
-                        return
-                    if delivery is None:
-                        continue
-                    handler.process(delivery)
+                log.info(
+                    "consumer queue declared", queue=CONSUMER_QUEUE, timingExchange=cfg.timing_exchange,
+                    identityExchange=cfg.identity_exchange,
+                )
+
+                # Own SQLite connection, same cross-thread reason as run_relay's.
+                conn = open_db(cfg.db_path)
+                try:
+                    handler = Handler(
+                        validate=validator.validate_envelope_bytes,
+                        conn=conn,
+                        source=cfg.service_name,
+                        policy=Policy(
+                            max_attempts=cfg.dlq_max_attempts,
+                            base_ms=cfg.dlq_retry_base_ms,
+                            multiplier=cfg.dlq_retry_multiplier,
+                            max_ms=cfg.dlq_retry_max_ms,
+                        ),
+                        log=log,
+                        retry=consumer_bus.retry_to_dlx,
+                        park=consumer_bus.park_to_dlx,
+                        notify=notify_relay,
+                    )
+                    for delivery in consumer_bus.consume(CONSUMER_QUEUE, inactivity_timeout=_CONNECTION_POLL_S):
+                        if cycle_stop.is_set():
+                            return
+                        if delivery is None:
+                            continue
+                        handler.process(delivery)
+                finally:
+                    conn.close()
             finally:
-                conn.close()
                 consumer_bus.close()
 
         run_with_reconnect(connect_and_consume, cycle_stop.is_set, log)
