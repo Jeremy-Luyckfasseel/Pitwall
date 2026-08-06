@@ -205,6 +205,10 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy          # don't start until the broker is ready (no sleeps, AR17)
+      timing:
+        condition: service_started          # so a bare `up` shows profiles flowing (ECST: works fine either order)
+      identity:
+        condition: service_started
     environment:
       RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
       RABBITMQ_PORT: 5672
@@ -216,7 +220,9 @@ services:
       SERVICE_NAME: driver                   # per-service (not the shared .env value)
       LIVENESS_FILE: /tmp/pitwall-driver.live
       CONTRACT_DIR: /contract               # the /contract tree COPYed into the image
-      DB_PATH: /data/driver.db              # private SQLite DB (outbox + inbox; Story 3.1 skeleton)
+      DB_PATH: /data/driver.db              # private SQLite DB (outbox + inbox + driver_profiles)
+      TIMING_EXCHANGE: ${TIMING_EXCHANGE:-timing.events}       # Story 3.2: lap.recorded safety-net trigger
+      IDENTITY_EXCHANGE: ${IDENTITY_EXCHANGE:-identity.events} # Story 3.2: identity.resolved safety-net trigger
       OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-200}
       CONSUME_PREFETCH: ${CONSUME_PREFETCH:-16}
       DLQ_MAX_ATTEMPTS: ${DLQ_MAX_ATTEMPTS:-5}            # Story 1.9 DLQ policy (Q&A Round 27)

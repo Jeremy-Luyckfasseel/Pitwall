@@ -41,6 +41,9 @@ class Config:
     dlq_retry_multiplier: int
     dlq_retry_max_ms: int
 
+    timing_exchange: str  # Timing's exchange this consumer binds to (lap.recorded)
+    identity_exchange: str  # Identity's exchange this consumer binds to (identity.resolved)
+
 
 def _get(getenv: Callable[[str], str | None], key: str) -> str:
     """Coerces a getenv result to a string. Defensive against a caller passing
@@ -123,4 +126,6 @@ def load_config(getenv: Callable[[str], str]) -> Config:
         dlq_retry_base_ms=dlq_retry_base_ms,
         dlq_retry_multiplier=dlq_retry_multiplier,
         dlq_retry_max_ms=dlq_retry_max_ms,
+        timing_exchange=_get(getenv, "TIMING_EXCHANGE").strip() or "timing.events",
+        identity_exchange=_get(getenv, "IDENTITY_EXCHANGE").strip() or "identity.events",
     )
