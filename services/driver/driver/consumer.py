@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from driver.domain.profile import MinimalProfile, build_profile_updated
-from driver.persistence.profiles import insert_minimal_profile, profile_exists
+from driver.persistence.profiles import insert_minimal_profile
 from pitwall.dlq import Policy, next_retry
 from pitwall.envelope import decode_incoming, format_wire_time
 from pitwall.messaging import Delivery
@@ -47,14 +47,15 @@ def ensure_minimal_profile(
     enqueue driver.profile_updated ONLY on a genuine creation -> inbox-mark, all in
     one transaction. When the profile already exists this is a pure no-op besides
     the inbox mark -- AC3's precedence rule, enforced by
-    driver.persistence.profiles.insert_minimal_profile's own construction."""
+    driver.persistence.profiles.insert_minimal_profile's own construction. `created`
+    is insert_minimal_profile's own INSERT-rowcount-derived return value, not a
+    preceding SELECT, so there is no check-then-insert race to reason about."""
     with within_tx(conn):
         if inbox_has_seen(conn, envelope_id):
             return ProcessResult(duplicate=True, created=False)
 
-        created = not profile_exists(conn, master_id)
+        created = insert_minimal_profile(conn, master_id, at)
         if created:
-            insert_minimal_profile(conn, master_id, at)
             env = build_profile_updated(
                 source=source,
                 correlation_id=correlation_id,
@@ -106,7 +107,7 @@ class Handler:
         if env.type not in _HANDLED_TYPES:
             # Tolerant reader: a valid type Driver does not handle here.
             self.log.debug("ignoring unhandled event type", type=env.type, eventId=env.id)
-            delivery.ack()
+            self._ack(delivery)
             return
 
         master_id = env.data.get("masterId") if isinstance(env.data, dict) else None
@@ -129,7 +130,13 @@ class Handler:
             self._retry_or_park(delivery, body, env.id, env.correlation_id, e)
             return
 
-        delivery.ack()
+        # From here on this is the success-path tail: ack + logging + the relay kick.
+        # None of it may crash this daemon thread -- an uncaught exception here would
+        # silently and permanently kill the whole safety net (nothing else notices;
+        # the heartbeat thread keeps beating regardless). Each step is independently
+        # guarded rather than wrapping the whole tail in one try/except, so a failure
+        # in one step (e.g. notify()) doesn't suppress the steps after it.
+        self._ack(delivery)
         if result.duplicate:
             self.log.debug("duplicate envelope ignored (idempotent inbox)", eventId=env.id, type=env.type)
             return
@@ -143,11 +150,26 @@ class Handler:
             )
             return
         if self.notify is not None:
-            self.notify()
+            try:
+                self.notify()
+            except Exception as e:
+                self.log.error("relay notify failed (non-fatal, poll interval is the backstop)", error=str(e))
         self.log.info(
             "minimal racing profile created", masterId=master_id, eventId=env.id, type=env.type,
             correlationId=env.correlation_id,
         )
+
+    def _ack(self, delivery: Delivery) -> None:
+        try:
+            delivery.ack()
+        except Exception as e:
+            self.log.error("failed to ack delivery", error=str(e))
+
+    def _nack(self, delivery: Delivery, requeue: bool) -> None:
+        try:
+            delivery.nack(requeue=requeue)
+        except Exception as e:
+            self.log.error("failed to nack delivery", error=str(e), requeue=requeue)
 
     def _retry_or_park(self, delivery: Delivery, body: bytes, event_id: str, correlation_id: str, cause: Exception) -> None:
         decision = next_retry(delivery.retry_count, self.policy)
@@ -159,29 +181,29 @@ class Handler:
             self._park(delivery, body, "retries-exhausted")
             return
         if self.retry is None:
-            delivery.nack(requeue=True)
+            self._nack(delivery, requeue=True)
             return
         try:
             self.retry(body, decision.delay_ms, decision.next_retries)
         except Exception as e:
             self.log.error("failed to schedule DLQ retry; requeueing", error=str(e), eventId=event_id)
-            delivery.nack(requeue=True)
+            self._nack(delivery, requeue=True)
             return
         self.log.warn(
             "processing failed; scheduled DLQ retry", error=str(cause), eventId=event_id,
             retryInMs=decision.delay_ms, attempt=decision.next_retries, correlationId=correlation_id,
         )
-        delivery.ack()
+        self._ack(delivery)
 
     def _park(self, delivery: Delivery, body: bytes, reason: str) -> None:
         if self.park is None:
-            delivery.nack(requeue=False)
+            self._nack(delivery, requeue=False)
             return
         try:
             self.park(body, reason)
         except Exception as e:
             self.log.error("failed to park message; requeueing", error=str(e), reason=reason)
-            delivery.nack(requeue=True)
+            self._nack(delivery, requeue=True)
             return
         self.log.error("message parked (quarantined); not retried", alert="message_parked", reason=reason)
-        delivery.ack()
+        self._ack(delivery)

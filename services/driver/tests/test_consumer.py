@@ -178,6 +178,29 @@ def test_invalid_message_is_parked_immediately_not_retried(conn):
     assert delivery.acked is True  # ack only after the park publish succeeds
 
 
+def test_undecodable_envelope_is_parked_immediately_not_retried(conn):
+    """A message that passes /contract validation (or whose validation is skipped/
+    stubbed) but is not parseable as a PitwallMessageEnvelope -- distinct from the
+    schema-invalid branch above, parks with a different reason."""
+    log = FakeLog()
+    parked = []
+    handler = Handler(
+        validate=lambda body: None,  # passes validation...
+        conn=conn,
+        source="driver",
+        policy=Policy(max_attempts=3, base_ms=100, multiplier=2, max_ms=1000),
+        log=log,
+        park=lambda body, reason: parked.append(reason),
+        now=lambda: NOW,
+    )
+    delivery = FakeDelivery(body=b"not json at all")  # ...but decode_incoming raises
+
+    handler.process(delivery)
+
+    assert parked == ["undecodable-envelope"]
+    assert delivery.acked is True  # ack only after the park publish succeeds
+
+
 def test_processing_failure_retries_then_parks_at_the_cap(conn):
     log = FakeLog()
     retried = []
@@ -206,6 +229,30 @@ def test_processing_failure_retries_then_parks_at_the_cap(conn):
     handler.process(second)
     assert parked == ["retries-exhausted"]
     assert second.acked is True
+
+
+def test_ack_failure_on_the_success_path_is_logged_not_raised(conn):
+    """A crashed daemon consumer thread is a silent, unrecoverable outage of the
+    whole safety net (nothing else signals it -- heartbeat keeps beating). Mirrors
+    Identity's Go handler, which logs an Ack() failure rather than letting it
+    propagate."""
+
+    class RaisingAckDelivery(FakeDelivery):
+        def ack(self) -> None:
+            raise RuntimeError("channel gone")
+
+    log = FakeLog()
+    handler = _handler(conn, log)
+    delivery = RaisingAckDelivery(
+        body=_envelope_bytes("00000000-0000-0000-0000-00000000000a", LAP_RECORDED_TYPE, MASTER_ID)
+    )
+
+    handler.process(delivery)  # must not raise
+
+    assert log.has("error", "ack")
+    # The profile was still created -- only the post-processing ack/notify tail failed.
+    row = conn.execute("SELECT master_id FROM driver_profiles WHERE master_id = ?", (MASTER_ID,)).fetchone()
+    assert row is not None
 
 
 def test_unhandled_event_type_is_acked_and_ignored(conn):

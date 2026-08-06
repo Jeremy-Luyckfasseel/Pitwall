@@ -22,7 +22,8 @@ def test_insert_minimal_profile_creates_an_all_null_row(migrated_db_path):
     conn = open_db(migrated_db_path)
     try:
         with within_tx(conn):
-            insert_minimal_profile(conn, MASTER_ID, AT)
+            created = insert_minimal_profile(conn, MASTER_ID, AT)
+        assert created is True  # its own INSERT's effect, not a preceding SELECT (closes a TOCTOU)
 
         assert profile_exists(conn, MASTER_ID) is True
         row = conn.execute(
@@ -43,7 +44,8 @@ def test_insert_minimal_profile_is_a_no_op_when_the_row_already_exists(migrated_
     conn = open_db(migrated_db_path)
     try:
         with within_tx(conn):
-            insert_minimal_profile(conn, MASTER_ID, AT)
+            first = insert_minimal_profile(conn, MASTER_ID, AT)
+        assert first is True
 
         # Simulate a real value having been set by some other, later path (not built
         # in this story -- just proves the guarantee holds regardless of row content).
@@ -51,7 +53,8 @@ def test_insert_minimal_profile_is_a_no_op_when_the_row_already_exists(migrated_
 
         later_at = "2026-06-02T15:00:00.000Z"
         with within_tx(conn):
-            insert_minimal_profile(conn, MASTER_ID, later_at)
+            second = insert_minimal_profile(conn, MASTER_ID, later_at)
+        assert second is False  # already existed -- its own INSERT's rowcount, not a stale SELECT
 
         row = conn.execute(
             "SELECT nickname, created_at, updated_at FROM driver_profiles WHERE master_id = ?",
