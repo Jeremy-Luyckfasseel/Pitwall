@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/driver/driver.profile_updated.v1.schema.json",
+  "title": "driver / driver.profile_updated (v1) data payload",
+  "description": "Driver's racing profile (identity/preference fields) for a masterId changed, or was created for the first time via the minimal-profile safety net. Published to the 'driver.events' exchange with routing key 'driver.profile_updated'. Field names/types mirror the 'racing' branch of contract/schemas/frontend/profile.edit_requested.v1.schema.json exactly (Q&A Round 35/Q35.1). Carries no PR/history stats — those are driver.pr_updated and driver.history_appended's own concern (Stories 3.4/3.3), never duplicated here.",
+  "type": "object",
+  "required": ["masterId"],
+  "properties": {
+    "masterId": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "Canonical masterId issued by Identity. Lowercase canonical UUID v4 (version nibble 4, variant nibble [89ab]); the pattern is enforced (format is annotation-only)."
+    },
+    "racingNumber": {
+      "type": ["string", "null"],
+      "description": "Preferred racing number. Null until set; always present (no omitempty on a meaningful wire field, AR9)."
+    },
+    "kartClass": {
+      "type": ["string", "null"],
+      "description": "Preferred kart class. Null until set."
+    },
+    "nickname": {
+      "type": ["string", "null"],
+      "description": "Leaderboard nickname. Null until set — Leaderboard falls back to racing number / a short masterId until this arrives (FR46)."
+    }
+  }
+}
