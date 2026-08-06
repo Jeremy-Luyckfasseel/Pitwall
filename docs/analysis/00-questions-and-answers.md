@@ -1438,3 +1438,35 @@ reason about for a solo build; avoids threading async/await through outbox, inbo
 mechanics for zero current benefit (no Python service has a latency/throughput need that requires asyncio).
 *Rejected:* `aio-pika`/asyncio — would fit better if FastAPI were actually serving async HTTP (Q34.1 rules
 that out) and adds real complexity (async DB access, async test fixtures) with no offsetting requirement.
+
+---
+
+## Round 35 — Story 3.2 Driver racing profile: `driver.profile_updated` payload scope & FR13's edit source (2026-08-06)
+
+> Surfaced while drafting **Story 3.2** (Driver racing profile, minimal-profile safety net, and
+> precedence). FR8/the driver service doc group "racing number, kart class, leaderboard nickname,
+> stats" together as what Driver owns, but Stories 3.3 (lap history → `driver.history_appended`) and
+> 3.4 (PR → `driver.pr_updated`) already own the concrete stats data via their own dedicated events —
+> not answered anywhere whether `driver.profile_updated`'s payload should also carry a stats snapshot.
+> Separately, FR13 ("conflicting edits to Driver-owned racing fields → Driver's write wins, conflict
+> logged") has only one other possible edit source on the wire (`contract/schemas/frontend/
+> profile.edit_requested.v1.schema.json`'s `racing` branch, already committed), but Frontend (Epic 5)
+> has no story yet — nothing produces it. Both asked per the golden rule (CLAUDE.md §0).
+
+**Q35.1 — Does `driver.profile_updated`'s payload include a stats snapshot?**
+A: **No — identity/preference fields only.** `data` carries `masterId` + `racingNumber` + `kartClass`
++ `nickname` (all nullable except `masterId`, mirroring `profile.edit_requested`'s `racing` branch
+field names/types exactly). PR and lap-history stats stay solely on their own dedicated events
+(`driver.pr_updated`, `driver.history_appended`, Stories 3.4/3.3) — never duplicated onto
+`driver.profile_updated`, so there is no second, staler copy of the same fact on the wire.
+
+**Q35.2 — Does Story 3.2 wire a live consumer for `profile.edit_requested`?**
+A: **No — out of Epic 3's scope; FR13 is satisfied within Driver alone.** Frontend doesn't exist yet
+and no story produces `profile.edit_requested`, so Driver does not consume it in Story 3.2. FR13's
+"conflicting edit" is instead the FR12 minimal-profile safety-net upsert (on `lap.recorded`/
+`identity.resolved` for a not-yet-local `masterId`) finding a profile that **already exists** with
+racing fields already set — the safety net only ever fills a field that is still unset/blank, never
+overwrites an already-set racing field with a default, and that refusal-to-overwrite is what gets
+logged as the "conflict." A real `profile.edit_requested` consumer is deferred to whichever future
+story actually wires Frontend/CRM (Epic 5/6) — this is forward-compatible (the schema and field names
+are already fixed by Q35.1) but not built here.
