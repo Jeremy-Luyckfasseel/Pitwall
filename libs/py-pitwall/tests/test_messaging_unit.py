@@ -13,6 +13,7 @@ from pitwall.messaging import (
     REDELIVER_ROUTING_KEY,
     RETRY_COUNT_HEADER,
     RETRY_ROUTING_KEY,
+    Binding,
     Bus,
     ConsumerOptions,
     _parse_retry_count,
@@ -94,10 +95,20 @@ def test_declare_dlq_topology_requires_dlx_exchange():
     bus = Bus("amqp://localhost", "driver.events")
     bus._channel = MagicMock()
     opts = ConsumerOptions(
-        source_exchange="frontend.events", queue_name="driver.lookup", routing_keys=["identity.resolved"],
-        prefetch=16, dlx_exchange="",
+        bindings=[Binding(source_exchange="frontend.events", routing_keys=["identity.resolved"])],
+        queue_name="driver.lookup",
+        prefetch=16,
+        dlx_exchange="",
     )
     with pytest.raises(ValueError, match="dlx_exchange"):
+        bus.declare_dlq_topology(opts)
+
+
+def test_declare_dlq_topology_requires_at_least_one_binding():
+    bus = Bus("amqp://localhost", "driver.events")
+    bus._channel = MagicMock()
+    opts = ConsumerOptions(bindings=[], queue_name="driver.lookup", prefetch=16, dlx_exchange="driver.dlx")
+    with pytest.raises(ValueError, match="bindings"):
         bus.declare_dlq_topology(opts)
 
 
@@ -106,9 +117,8 @@ def test_declare_dlq_topology_declares_full_topology():
     ch = MagicMock()
     bus._channel = ch
     opts = ConsumerOptions(
-        source_exchange="timing.events",
+        bindings=[Binding(source_exchange="timing.events", routing_keys=["lap.recorded"])],
         queue_name="driver.lap-recorded",
-        routing_keys=["lap.recorded"],
         prefetch=16,
         dlx_exchange="driver.dlx",
     )
@@ -133,6 +143,40 @@ def test_declare_dlq_topology_declares_full_topology():
     ch.queue_bind.assert_any_call("driver.lap-recorded", "timing.events", "lap.recorded")
     ch.basic_qos.assert_called_once_with(prefetch_count=16)
     assert bus._dlx == "driver.dlx"
+
+
+def test_declare_dlq_topology_binds_one_queue_to_multiple_source_exchanges():
+    """Driver needs ONE queue+DLQ topology fed by TWO producers (lap.recorded off
+    timing.events, identity.resolved off identity.events) -- Story 3.2's reason for
+    this extension. Each source exchange is declared and bound with its own routing
+    keys; the retry/parking/DLX topology stays a single, shared instance (one set of
+    backoff/parking semantics regardless of which producer triggered it)."""
+    bus = Bus("amqp://localhost", "driver.events")
+    ch = MagicMock()
+    bus._channel = ch
+    opts = ConsumerOptions(
+        bindings=[
+            Binding(source_exchange="timing.events", routing_keys=["lap.recorded"]),
+            Binding(source_exchange="identity.events", routing_keys=["identity.resolved"]),
+        ],
+        queue_name="driver.profile-safety-net",
+        prefetch=16,
+        dlx_exchange="driver.dlx",
+    )
+    bus.declare_dlq_topology(opts)
+
+    ch.exchange_declare.assert_any_call(exchange="timing.events", exchange_type="topic", durable=True)
+    ch.exchange_declare.assert_any_call(exchange="identity.events", exchange_type="topic", durable=True)
+    ch.queue_bind.assert_any_call("driver.profile-safety-net", "timing.events", "lap.recorded")
+    ch.queue_bind.assert_any_call("driver.profile-safety-net", "identity.events", "identity.resolved")
+    # The retry/parking/DLX topology is declared exactly once, shared across both bindings.
+    ch.queue_declare.assert_any_call(
+        "driver.profile-safety-net.retry",
+        durable=True,
+        arguments={"x-dead-letter-exchange": "driver.dlx", "x-dead-letter-routing-key": REDELIVER_ROUTING_KEY},
+    )
+    assert ch.queue_declare.call_count == 3  # work queue + retry + parking, not doubled per binding
+    ch.basic_qos.assert_called_once_with(prefetch_count=16)
 
 
 def test_retry_to_dlx_carries_backoff_ttl_and_headers():

@@ -38,10 +38,17 @@ def parking_queue_name(work_queue: str) -> str:
 
 
 @dataclass(frozen=True)
-class ConsumerOptions:
+class Binding:
+    """One producer exchange plus the routing keys this consumer binds to on it."""
+
     source_exchange: str  # the PRODUCER's exchange to bind to (e.g. "timing.events")
-    queue_name: str  # this consumer's durable queue
     routing_keys: list[str]  # binding keys
+
+
+@dataclass(frozen=True)
+class ConsumerOptions:
+    bindings: list[Binding]  # every (producer exchange, routing keys) pair this queue binds to
+    queue_name: str  # this consumer's durable queue
     prefetch: int  # QoS: max in-flight unacked deliveries
     dlx_exchange: str  # the consumer-side dead-letter exchange (e.g. "driver.dlx")
 
@@ -120,17 +127,25 @@ class Bus:
 
     def declare_dlq_topology(self, opts: ConsumerOptions) -> None:
         """Declares the full consumer-side DLQ topology for the given work queue and
-        binds it to its source exchange: a retry queue (TTL-per-message dead-lettering
-        back to the work queue), a terminal parking queue, and the work queue itself
+        binds it to EVERY producer exchange listed in opts.bindings (one queue can be
+        fed by more than one producer, e.g. Driver's profile safety net consumes both
+        timing.events' lap.recorded and identity.events' identity.resolved into a
+        single queue — Story 3.2): a retry queue (TTL-per-message dead-lettering back
+        to the work queue), a terminal parking queue, and the work queue itself
         carrying dead-letter args pointing at the parking route (a safety net: an
-        unmodelled reject parks rather than drops)."""
+        unmodelled reject parks rather than drops). The retry/parking/DLX topology is
+        declared exactly once regardless of how many bindings are listed — it is
+        shared, not duplicated per producer."""
         if not opts.dlx_exchange:
             raise ValueError("declare_dlq_topology: ConsumerOptions.dlx_exchange must be set")
+        if not opts.bindings:
+            raise ValueError("declare_dlq_topology: ConsumerOptions.bindings must have at least one entry")
         ch = self._channel
         retry_q = retry_queue_name(opts.queue_name)
         parking_q = parking_queue_name(opts.queue_name)
 
-        ch.exchange_declare(exchange=opts.source_exchange, exchange_type="topic", durable=True)
+        for binding in opts.bindings:
+            ch.exchange_declare(exchange=binding.source_exchange, exchange_type="topic", durable=True)
         ch.exchange_declare(exchange=opts.dlx_exchange, exchange_type="direct", durable=True)
 
         ch.queue_declare(
@@ -154,8 +169,9 @@ class Bus:
         ch.queue_bind(retry_q, opts.dlx_exchange, RETRY_ROUTING_KEY)
         ch.queue_bind(opts.queue_name, opts.dlx_exchange, REDELIVER_ROUTING_KEY)
         ch.queue_bind(parking_q, opts.dlx_exchange, PARK_ROUTING_KEY)
-        for key in opts.routing_keys:
-            ch.queue_bind(opts.queue_name, opts.source_exchange, key)
+        for binding in opts.bindings:
+            for key in binding.routing_keys:
+                ch.queue_bind(opts.queue_name, binding.source_exchange, key)
 
         ch.basic_qos(prefetch_count=opts.prefetch)
         self._dlx = opts.dlx_exchange
