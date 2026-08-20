@@ -223,12 +223,19 @@ def test_processing_failure_retries_then_parks_at_the_cap(conn):
     assert retried == [(100, 1)]
     assert parked == []
     assert first.acked is True
+    # Confirms the failure is specifically conn=None's AttributeError from within_tx's
+    # `conn.execute("BEGIN")` -- not some unrelated bug elsewhere in ensure_minimal_profile
+    # that happens to also raise.
+    warn_fields = next(fields for level, _, fields in log.lines if level == "warn")
+    assert "NoneType" in warn_fields["error"] and "execute" in warn_fields["error"]
 
     # Second failure (retry_count=1, i.e. attempt 2 of max_attempts=2): parks.
     second = FakeDelivery(body=_envelope_bytes("00000000-0000-0000-0000-000000000006", LAP_RECORDED_TYPE, MASTER_ID), retry_count=1)
     handler.process(second)
     assert parked == ["retries-exhausted"]
     assert second.acked is True
+    error_fields = next(fields for level, _, fields in log.lines if level == "error" and fields.get("maxAttempts"))
+    assert "NoneType" in error_fields["error"] and "execute" in error_fields["error"]
 
 
 def test_ack_failure_on_the_success_path_is_logged_not_raised(conn):
@@ -253,6 +260,35 @@ def test_ack_failure_on_the_success_path_is_logged_not_raised(conn):
     # The profile was still created -- only the post-processing ack/notify tail failed.
     row = conn.execute("SELECT master_id FROM driver_profiles WHERE master_id = ?", (MASTER_ID,)).fetchone()
     assert row is not None
+
+
+def test_nack_failure_is_logged_not_raised(conn):
+    """The twin of test_ack_failure_on_the_success_path_is_logged_not_raised: _nack is
+    the same guarded log-and-continue helper as _ack (used by _park's own fallback when
+    no park callback is configured), and must not crash the daemon consumer thread
+    either."""
+
+    class RaisingNackDelivery(FakeDelivery):
+        def nack(self, requeue: bool = False) -> None:
+            raise RuntimeError("channel gone")
+
+    log = FakeLog()
+    handler = Handler(
+        validate=lambda body: (_ for _ in ()).throw(ValueError("bad schema")),
+        conn=conn,
+        source="driver",
+        policy=Policy(max_attempts=3, base_ms=100, multiplier=2, max_ms=1000),
+        log=log,
+        park=None,  # forces _park's fallback: self._nack(delivery, requeue=False)
+        now=lambda: NOW,
+    )
+    delivery = RaisingNackDelivery(body=b"garbage")
+
+    handler.process(delivery)  # must not raise
+
+    assert log.has("error", "nack")
+    assert delivery.acked is False
+    assert delivery.nacked is None  # RaisingNackDelivery never actually records a nack
 
 
 def test_unhandled_event_type_is_acked_and_ignored(conn):
