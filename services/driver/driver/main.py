@@ -130,10 +130,14 @@ def main() -> int:
     # consumer thread's notify callback can kick it after enqueueing a fresh
     # driver.profile_updated row -- the Relay itself is constructed inside
     # run_relay, on the relay thread, so it cannot simply be a closed-over local.
+    # relay_box_lock guards every read/write below rather than relying on the GIL
+    # making a single dict op atomic (an undocumented CPython implementation detail).
     relay_box: dict[str, Relay] = {}
+    relay_box_lock = threading.Lock()
 
     def notify_relay() -> None:
-        relay = relay_box.get("relay")
+        with relay_box_lock:
+            relay = relay_box.get("relay")
         if relay is not None:
             relay.kick()
 
@@ -160,10 +164,12 @@ def main() -> int:
                 interval_s=cfg.outbox_poll_interval_ms / 1000.0,
                 log=log,
             )
-            relay_box["relay"] = relay
+            with relay_box_lock:
+                relay_box["relay"] = relay
             relay.run(cycle_stop)
         finally:
-            relay_box.pop("relay", None)
+            with relay_box_lock:
+                relay_box.pop("relay", None)
             conn.close()
 
     def run_consumer(cycle_stop: threading.Event) -> None:
