@@ -141,6 +141,15 @@ class Bus:
         if not opts.bindings:
             raise ValueError("declare_dlq_topology: ConsumerOptions.bindings must have at least one entry")
         for binding in opts.bindings:
+            if not binding.source_exchange:
+                raise ValueError(
+                    f"declare_dlq_topology: Binding has an empty source_exchange (routing_keys={binding.routing_keys!r})"
+                )
+            if not isinstance(binding.routing_keys, list) or not all(isinstance(k, str) for k in binding.routing_keys):
+                raise ValueError(
+                    f"declare_dlq_topology: Binding for {binding.source_exchange!r} routing_keys must be a "
+                    f"list[str], got {binding.routing_keys!r}"
+                )
             if not binding.routing_keys:
                 raise ValueError(
                     f"declare_dlq_topology: Binding for {binding.source_exchange!r} has no routing_keys "
