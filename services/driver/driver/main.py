@@ -1,11 +1,12 @@
 """Driver's entrypoint: runs its own Alembic migrations, connects to the bus (retried,
 supervised across broker restarts), declares its own durable exchange, emits a 1 s
-heartbeat, drains its own outbox via the relay, logs structured JSON, and shuts down
-gracefully on SIGTERM/SIGINT (mirrors services/timing/cmd/timing/main.go's Story-1.3
-shape plus its Story-1.4/1.10 outbox-relay + reconnect-supervisor shape, translated to
-Python's threading model — see pitwall.messaging.run_with_reconnect's docstring for why
-this is a whole-cycle retry rather than Go's live channel swap). No domain logic yet
-(Story 3.2+) — this IS the skeleton the story delivers.
+heartbeat, drains its own outbox via the relay, consumes the minimal-profile safety
+net (Story 3.2 -- lap.recorded off timing.events + identity.resolved off
+identity.events, one queue), logs structured JSON, and shuts down gracefully on
+SIGTERM/SIGINT (mirrors services/timing/cmd/timing/main.go's Story-1.3 shape plus its
+Story-1.4/1.10 outbox-relay + reconnect-supervisor shape, translated to Python's
+threading model — see pitwall.messaging.run_with_reconnect's docstring for why this
+is a whole-cycle retry rather than Go's live channel swap).
 """
 
 from __future__ import annotations
@@ -17,10 +18,11 @@ import threading
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from pika.exceptions import AMQPConnectionError
+from pitwall.dlq import Policy
 from pitwall.envelope import new_heartbeat_envelope
 from pitwall.heartbeat import Emitter
 from pitwall.logging import new_logger
-from pitwall.messaging import Bus, run_with_reconnect
+from pitwall.messaging import Binding, Bus, ConsumerOptions, run_with_reconnect
 from pitwall.persistence import (
     open_db,
     outbox_fetch_pending,
@@ -32,8 +34,11 @@ from pitwall.relay import Relay
 from pitwall.validate import Validator, resolve_contract_dir
 
 from driver.config import ConfigError, load_config
+from driver.consumer import IDENTITY_RESOLVED_TYPE, LAP_RECORDED_TYPE, Handler
 
 DRIVER_EXCHANGE = "driver.events"
+CONSUMER_QUEUE = "driver.profile-safety-net"
+CONSUMER_DLX = "driver.dlx"
 
 # How often connect_and_run polls the bus connection for a mid-run drop while otherwise
 # blocked waiting for the shutdown signal. Coarse on purpose: this is a liveness check,
@@ -121,6 +126,21 @@ def main() -> int:
     def validate_heartbeat(env):
         validator.validate_heartbeat(env.model_dump(mode="json", by_alias=True, exclude_none=False))
 
+    # Holds the CURRENT connection cycle's live Relay instance (if any) so the
+    # consumer thread's notify callback can kick it after enqueueing a fresh
+    # driver.profile_updated row -- the Relay itself is constructed inside
+    # run_relay, on the relay thread, so it cannot simply be a closed-over local.
+    # relay_box_lock guards every read/write below rather than relying on the GIL
+    # making a single dict op atomic (an undocumented CPython implementation detail).
+    relay_box: dict[str, Relay] = {}
+    relay_box_lock = threading.Lock()
+
+    def notify_relay() -> None:
+        with relay_box_lock:
+            relay = relay_box.get("relay")
+        if relay is not None:
+            relay.kick()
+
     def run_relay(publish, cycle_stop: threading.Event) -> None:
         """The relay thread's own entrypoint. Opens ITS OWN SQLite connection here, on
         this thread — sqlite3's default check_same_thread=True makes a connection
@@ -144,9 +164,81 @@ def main() -> int:
                 interval_s=cfg.outbox_poll_interval_ms / 1000.0,
                 log=log,
             )
+            with relay_box_lock:
+                relay_box["relay"] = relay
             relay.run(cycle_stop)
         finally:
+            with relay_box_lock:
+                relay_box.pop("relay", None)
             conn.close()
+
+    def run_consumer(cycle_stop: threading.Event) -> None:
+        """The consumer thread's own entrypoint (Story 3.2). Uses its OWN Bus/AMQP
+        connection, entirely separate from the one heartbeat/relay publish on:
+        pika's BlockingChannel is documented (Bus.__init__) as unsafe for
+        consume()/declare_dlq_topology() to share a channel with concurrent
+        publish() calls from other threads -- consume()'s blocking generator and a
+        concurrent basic_publish can interleave frames and hang the connection's
+        I/O loop entirely, not just corrupt one frame (the same reason
+        test_messaging_integration.py's park-then-observe assertion uses a separate
+        observer Bus rather than reusing the producer's). Supervises its OWN
+        reconnects via run_with_reconnect, scoped to cycle_stop -- independent of
+        whether the main bus's connection is still healthy."""
+
+        def connect_and_consume() -> None:
+            # consumer_bus.close() must run on EVERY exit path from this point on,
+            # including a failure inside connect()/declare_dlq_topology() itself --
+            # otherwise a persistent topology mismatch leaks one connection per
+            # run_with_reconnect retry attempt.
+            consumer_bus = Bus(amqp_url, DRIVER_EXCHANGE)
+            try:
+                consumer_bus.connect()
+                consumer_bus.declare_dlq_topology(
+                    ConsumerOptions(
+                        bindings=[
+                            Binding(source_exchange=cfg.timing_exchange, routing_keys=[LAP_RECORDED_TYPE]),
+                            Binding(source_exchange=cfg.identity_exchange, routing_keys=[IDENTITY_RESOLVED_TYPE]),
+                        ],
+                        queue_name=CONSUMER_QUEUE,
+                        prefetch=cfg.consume_prefetch,
+                        dlx_exchange=CONSUMER_DLX,
+                    )
+                )
+                log.info(
+                    "consumer queue declared", queue=CONSUMER_QUEUE, timingExchange=cfg.timing_exchange,
+                    identityExchange=cfg.identity_exchange,
+                )
+
+                # Own SQLite connection, same cross-thread reason as run_relay's.
+                conn = open_db(cfg.db_path)
+                try:
+                    handler = Handler(
+                        validate=validator.validate_envelope_bytes,
+                        conn=conn,
+                        source=cfg.service_name,
+                        policy=Policy(
+                            max_attempts=cfg.dlq_max_attempts,
+                            base_ms=cfg.dlq_retry_base_ms,
+                            multiplier=cfg.dlq_retry_multiplier,
+                            max_ms=cfg.dlq_retry_max_ms,
+                        ),
+                        log=log,
+                        retry=consumer_bus.retry_to_dlx,
+                        park=consumer_bus.park_to_dlx,
+                        notify=notify_relay,
+                    )
+                    for delivery in consumer_bus.consume(CONSUMER_QUEUE, inactivity_timeout=_CONNECTION_POLL_S):
+                        if cycle_stop.is_set():
+                            return
+                        if delivery is None:
+                            continue
+                        handler.process(delivery)
+                finally:
+                    conn.close()
+            finally:
+                consumer_bus.close()
+
+        run_with_reconnect(connect_and_consume, cycle_stop.is_set, log)
 
     def connect_and_run() -> None:
         """One full connect-run-until-disconnected-or-stopped cycle. Returns cleanly
@@ -174,6 +266,9 @@ def main() -> int:
         relay_thread = threading.Thread(target=run_relay, args=(bus.publish, cycle_stop), name="relay", daemon=True)
         relay_thread.start()
 
+        consumer_thread = threading.Thread(target=run_consumer, args=(cycle_stop,), name="consumer", daemon=True)
+        consumer_thread.start()
+
         connection_lost = False
         try:
             while not stop.wait(timeout=_CONNECTION_POLL_S):
@@ -185,6 +280,7 @@ def main() -> int:
             cycle_stop.set()
             _join_and_log(heartbeat_thread, cfg.shutdown_timeout_ms, log, "heartbeat")
             _join_and_log(relay_thread, cfg.shutdown_timeout_ms, log, "relay")
+            _join_and_log(consumer_thread, cfg.shutdown_timeout_ms, log, "consumer")
             bus.close()
 
         if connection_lost:

@@ -10,14 +10,19 @@ does not (it never touches SQLite/outbox/inbox).
 
 from __future__ import annotations
 
+import json
 import threading
 import uuid
+from dataclasses import dataclass
+from pathlib import Path
 
 import pika
 import pytest
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from pitwall.messaging import Bus
+from driver.consumer import Handler
+from pitwall.dlq import Policy
+from pitwall.messaging import Binding, Bus, ConsumerOptions
 from pitwall.persistence import (
     inbox_has_seen,
     inbox_mark_seen,
@@ -30,9 +35,10 @@ from pitwall.persistence import (
     within_tx,
 )
 from pitwall.relay import Relay
+from pitwall.validate import Validator
 from testcontainers.community.rabbitmq import RabbitMqContainer
 
-_SERVICE_DIR = __import__("pathlib").Path(__file__).resolve().parent.parent
+_SERVICE_DIR = Path(__file__).resolve().parent.parent
 
 
 class _FakeLog:
@@ -205,3 +211,297 @@ def test_inbox_dedupes_a_redelivered_envelope_id(tmp_path):
         assert inbox_has_seen(conn, envelope_id) is True
 
     conn.close()
+
+
+# --- Consumer (Story 3.2): the minimal-profile safety net, end to end -----------------
+
+
+def _repo_root() -> Path:
+    d = Path(__file__).resolve()
+    while d != d.parent:
+        if (d / "contract" / "schemas" / "envelope.schema.json").is_file():
+            return d
+        d = d.parent
+    raise RuntimeError("could not locate repo root")
+
+
+@pytest.fixture(scope="module")
+def validator() -> Validator:
+    return Validator(str(_repo_root() / "contract"))
+
+
+class _RecordingLog:
+    def __init__(self):
+        self.lines = []
+
+    def _rec(self, level, message, **fields):
+        self.lines.append((level, message, fields))
+
+    def debug(self, message, **fields):
+        self._rec("debug", message, **fields)
+
+    def info(self, message, **fields):
+        self._rec("info", message, **fields)
+
+    def warn(self, message, **fields):
+        self._rec("warn", message, **fields)
+
+    def error(self, message, **fields):
+        self._rec("error", message, **fields)
+
+    def has(self, level, needle):
+        return any(level == lvl and needle in msg for lvl, msg, _ in self.lines)
+
+
+def _lap_recorded_body(envelope_id: str, master_id: str, lap_number: int = 1) -> bytes:
+    return json.dumps(
+        {
+            "id": envelope_id,
+            "type": "lap.recorded",
+            "source": "timing",
+            "schemaVersion": 1,
+            "envelopeVersion": 1,
+            "occurredAt": "2026-08-06T12:00:00.000Z",
+            "correlationId": envelope_id,
+            "causationId": None,
+            "data": {
+                "masterId": master_id,
+                "sessionId": "sess-1",
+                "lapNumber": lap_number,
+                "lapTimeMs": 42000,
+                "at": "2026-08-06T12:00:00.000Z",
+                "transponderId": None,
+            },
+        }
+    ).encode("utf-8")
+
+
+def _identity_resolved_body(envelope_id: str, master_id: str) -> bytes:
+    return json.dumps(
+        {
+            "id": envelope_id,
+            "type": "identity.resolved",
+            "source": "identity",
+            "schemaVersion": 1,
+            "envelopeVersion": 1,
+            "occurredAt": "2026-08-06T12:00:00.000Z",
+            "correlationId": envelope_id,
+            "causationId": envelope_id,
+            "data": {"requestId": envelope_id, "email": "test@example.com", "masterId": master_id},
+        }
+    ).encode("utf-8")
+
+
+@dataclass
+class _ConsumerEnv:
+    conn: object
+    consumer_bus: Bus
+    publish_bus: Bus
+    observer_bus: Bus
+    handler: Handler
+    log: _RecordingLog
+    timing_exchange: str
+    identity_exchange: str
+    queue: str
+    observe_queue: str
+
+    def deliveries(self):
+        return self.consumer_bus.consume(self.queue)
+
+    def drain_relay_once(self, validator: Validator) -> int:
+        relay = Relay(
+            fetch_pending=lambda limit: outbox_fetch_pending(self.conn, limit),
+            mark_sent=lambda rid, sent_at: outbox_mark_sent(self.conn, rid, sent_at),
+            mark_quarantined=lambda rid, err: outbox_mark_quarantined(self.conn, rid, err),
+            record_failure=lambda rid, err: outbox_record_failure(self.conn, rid, err),
+            validate=validator.validate_envelope_bytes,
+            publish=self.publish_bus.publish,
+            interval_s=0.05,
+            log=self.log,
+        )
+        return relay.drain_once()
+
+    def observe_profile_updated(self):
+        d = next(self.observer_bus.consume(self.observe_queue))
+        d.ack()
+        return json.loads(d.body)
+
+    def close(self):
+        self.consumer_bus.close()
+        self.publish_bus.close()
+        self.observer_bus.close()
+        self.conn.close()
+
+
+@pytest.fixture()
+def consumer_env(tmp_path, rabbitmq_params, validator: Validator) -> _ConsumerEnv:
+    db_path = _migrated_db(tmp_path)
+    conn = open_db(db_path)
+    suffix = uuid.uuid4().hex[:8]
+    driver_exchange = f"test.driver.events.{suffix}"
+    timing_exchange = f"test.timing.events.{suffix}"
+    identity_exchange = f"test.identity.events.{suffix}"
+    queue = f"test.driver.profile-safety-net.{suffix}"
+    dlx = f"test.driver.dlx.{suffix}"
+    observe_queue = f"test.driver.observe.{suffix}"
+
+    # Three SEPARATE connections (consume/publish/observe), same reason every other
+    # test in this file uses one -- pika's BlockingChannel is not safe for concurrent
+    # cross-thread use, and even same-thread reuse across a publish-then-consume
+    # sequence on the SAME bus object used elsewhere in this file only works because
+    # it stays strictly sequential; here consumer_bus both publishes (the test
+    # fixtures onto timing/identity exchanges) and consumes (the queue), which stays
+    # sequential too, but the observer needs its own connection since it consumes
+    # concurrently with nothing else touching consumer_bus's channel by then.
+    consumer_bus = Bus(_amqp_url(rabbitmq_params), driver_exchange)
+    consumer_bus.connect()
+    consumer_bus.declare_dlq_topology(
+        ConsumerOptions(
+            bindings=[
+                Binding(source_exchange=timing_exchange, routing_keys=["lap.recorded"]),
+                Binding(source_exchange=identity_exchange, routing_keys=["identity.resolved"]),
+            ],
+            queue_name=queue,
+            prefetch=16,
+            dlx_exchange=dlx,
+        )
+    )
+
+    publish_bus = Bus(_amqp_url(rabbitmq_params), driver_exchange)
+    publish_bus.connect()
+
+    observer_bus = Bus(_amqp_url(rabbitmq_params), driver_exchange)
+    observer_bus.connect()
+    observer_bus._channel.queue_declare(observe_queue, durable=True)
+    observer_bus._channel.queue_bind(observe_queue, driver_exchange, "driver.profile_updated")
+
+    log = _RecordingLog()
+    handler = Handler(
+        validate=validator.validate_envelope_bytes,
+        conn=conn,
+        source="driver",
+        policy=Policy(max_attempts=5, base_ms=1000, multiplier=2, max_ms=60000),
+        log=log,
+        retry=consumer_bus.retry_to_dlx,
+        park=consumer_bus.park_to_dlx,
+    )
+
+    env = _ConsumerEnv(
+        conn=conn, consumer_bus=consumer_bus, publish_bus=publish_bus, observer_bus=observer_bus,
+        handler=handler, log=log, timing_exchange=timing_exchange, identity_exchange=identity_exchange,
+        queue=queue, observe_queue=observe_queue,
+    )
+    yield env
+    env.close()
+
+
+def test_lap_recorded_for_fresh_master_id_creates_profile_and_publishes_profile_updated(
+    consumer_env: _ConsumerEnv, validator: Validator
+):
+    master_id = str(uuid.uuid4())
+    envelope_id = str(uuid.uuid4())
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="lap.recorded",
+        body=_lap_recorded_body(envelope_id, master_id),
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+
+    consumer_env.handler.process(next(consumer_env.deliveries()))
+
+    row = consumer_env.conn.execute(
+        "SELECT master_id, racing_number, kart_class, nickname FROM driver_profiles WHERE master_id = ?",
+        (master_id,),
+    ).fetchone()
+    assert tuple(row) == (master_id, None, None, None)
+
+    sent = consumer_env.drain_relay_once(validator)
+    assert sent == 1
+
+    observed = consumer_env.observe_profile_updated()
+    assert observed["type"] == "driver.profile_updated"
+    assert observed["data"]["masterId"] == master_id
+    assert observed["data"] == {"masterId": master_id, "racingNumber": None, "kartClass": None, "nickname": None}
+
+
+def test_redelivery_of_the_same_envelope_id_publishes_no_second_profile_updated(
+    consumer_env: _ConsumerEnv, validator: Validator
+):
+    master_id = str(uuid.uuid4())
+    envelope_id = str(uuid.uuid4())
+    body = _lap_recorded_body(envelope_id, master_id)
+
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="lap.recorded", body=body,
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    deliveries = consumer_env.deliveries()
+    consumer_env.handler.process(next(deliveries))
+    assert consumer_env.drain_relay_once(validator) == 1  # first (expected) publish drained + marked sent
+    sent_after_first = consumer_env.conn.execute("SELECT COUNT(*) FROM outbox WHERE status='sent'").fetchone()[0]
+    assert sent_after_first == 1
+
+    # Redeliver the IDENTICAL envelope (same id) on the SAME queue.
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="lap.recorded", body=body,
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    consumer_env.handler.process(next(deliveries))
+
+    assert outbox_fetch_pending(consumer_env.conn, 10) == []  # no second row enqueued
+    sent_after_redelivery = consumer_env.conn.execute("SELECT COUNT(*) FROM outbox WHERE status='sent'").fetchone()[0]
+    assert sent_after_redelivery == 1  # still just the one -- no second publish
+    assert consumer_env.log.has("debug", "duplicate envelope ignored")
+
+
+def test_identity_resolved_for_fresh_master_id_also_creates_profile(consumer_env: _ConsumerEnv, validator: Validator):
+    """Both trigger types share the safety net (AC2)."""
+    master_id = str(uuid.uuid4())
+    envelope_id = str(uuid.uuid4())
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.identity_exchange, routing_key="identity.resolved",
+        body=_identity_resolved_body(envelope_id, master_id),
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+
+    consumer_env.handler.process(next(consumer_env.deliveries()))
+
+    row = consumer_env.conn.execute(
+        "SELECT master_id FROM driver_profiles WHERE master_id = ?", (master_id,)
+    ).fetchone()
+    assert row is not None
+    assert consumer_env.drain_relay_once(validator) == 1
+
+
+def test_second_distinct_trigger_for_an_already_local_master_id_publishes_nothing_and_is_logged(
+    consumer_env: _ConsumerEnv, validator: Validator
+):
+    """AC3: a SECOND, distinct envelope (different id, different lap) for a masterId
+    that already has a local profile must not touch the row and must not publish a
+    second driver.profile_updated -- and the skip must be logged."""
+    master_id = str(uuid.uuid4())
+    deliveries = consumer_env.deliveries()
+
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="lap.recorded",
+        body=_lap_recorded_body(str(uuid.uuid4()), master_id, lap_number=1),
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    consumer_env.handler.process(next(deliveries))
+    assert consumer_env.drain_relay_once(validator) == 1  # first (expected) publish drained + marked sent
+
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="lap.recorded",
+        body=_lap_recorded_body(str(uuid.uuid4()), master_id, lap_number=2),
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    consumer_env.handler.process(next(deliveries))
+
+    row = consumer_env.conn.execute(
+        "SELECT master_id, racing_number, kart_class, nickname FROM driver_profiles WHERE master_id = ?",
+        (master_id,),
+    ).fetchone()
+    assert tuple(row) == (master_id, None, None, None)  # untouched
+    assert outbox_fetch_pending(consumer_env.conn, 10) == []  # no second row enqueued
+    sent_count = consumer_env.conn.execute("SELECT COUNT(*) FROM outbox WHERE status='sent'").fetchone()[0]
+    assert sent_count == 1  # still just the one -- no second publish
+    assert consumer_env.log.has("info", "profile already local, skipped")

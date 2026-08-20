@@ -36,6 +36,8 @@ def test_defaults_applied_when_optional_vars_absent():
     assert cfg.dlq_retry_max_ms == 60000
     assert cfg.instance_id  # minted when unset
     assert cfg.contract_dir == ""  # resolved by the validator when empty
+    assert cfg.timing_exchange == "timing.events"
+    assert cfg.identity_exchange == "identity.events"
 
 
 def test_explicit_values_override_defaults():
@@ -49,6 +51,8 @@ def test_explicit_values_override_defaults():
             LIVENESS_FILE="/tmp/pitwall-driver.live",
             CONTRACT_DIR="/contract",
             INSTANCE_ID="fixed-instance-1",
+            TIMING_EXCHANGE="custom.timing.events",
+            IDENTITY_EXCHANGE="custom.identity.events",
         )
     )
     assert cfg.rabbitmq_vhost == "/custom"
@@ -58,6 +62,8 @@ def test_explicit_values_override_defaults():
     assert cfg.liveness_file == "/tmp/pitwall-driver.live"
     assert cfg.contract_dir == "/contract"
     assert cfg.instance_id == "fixed-instance-1"
+    assert cfg.timing_exchange == "custom.timing.events"
+    assert cfg.identity_exchange == "custom.identity.events"
 
 
 def test_non_positive_heartbeat_interval_rejected():

@@ -11,7 +11,7 @@ import uuid
 import pika
 import pytest
 
-from pitwall.messaging import Bus, ConsumerOptions
+from pitwall.messaging import Binding, Bus, ConsumerOptions
 
 AMQP_URL = os.environ.get("PITWALL_TEST_AMQP_URL", "amqp://guest:guest@localhost:5672/")
 
@@ -34,6 +34,7 @@ def unique_names():
     return {
         "own_exchange": f"test.driver.events.{suffix}",
         "source_exchange": f"test.timing.events.{suffix}",
+        "second_source_exchange": f"test.identity.events.{suffix}",
         "queue": f"test.driver.lap-recorded.{suffix}",
         "dlx": f"test.driver.dlx.{suffix}",
     }
@@ -62,9 +63,8 @@ def test_dlq_topology_retry_then_park(unique_names):
     bus.connect()
     try:
         opts = ConsumerOptions(
-            source_exchange=unique_names["source_exchange"],
+            bindings=[Binding(source_exchange=unique_names["source_exchange"], routing_keys=["lap.recorded"])],
             queue_name=unique_names["queue"],
-            routing_keys=["lap.recorded"],
             prefetch=16,
             dlx_exchange=unique_names["dlx"],
         )
@@ -115,3 +115,48 @@ def test_dlq_topology_retry_then_park(unique_names):
         d3.ack()
     finally:
         observer.close()
+
+
+def test_one_queue_receives_from_two_producer_exchanges(unique_names):
+    """Story 3.2's actual need: Driver's profile safety net consumes lap.recorded off
+    timing.events AND identity.resolved off identity.events into ONE durable queue
+    sharing ONE DLQ topology. Proves both bindings work against a real broker and that
+    a message published on EITHER exchange lands on the same queue."""
+    bus = Bus(AMQP_URL, unique_names["own_exchange"])
+    bus.connect()
+    try:
+        opts = ConsumerOptions(
+            bindings=[
+                Binding(source_exchange=unique_names["source_exchange"], routing_keys=["lap.recorded"]),
+                Binding(
+                    source_exchange=unique_names["second_source_exchange"], routing_keys=["identity.resolved"]
+                ),
+            ],
+            queue_name=unique_names["queue"],
+            prefetch=16,
+            dlx_exchange=unique_names["dlx"],
+        )
+        bus.declare_dlq_topology(opts)
+
+        bus._channel.basic_publish(
+            exchange=unique_names["source_exchange"],
+            routing_key="lap.recorded",
+            body=b"from-timing",
+            properties=pika.BasicProperties(delivery_mode=2),
+        )
+        bus._channel.basic_publish(
+            exchange=unique_names["second_source_exchange"],
+            routing_key="identity.resolved",
+            body=b"from-identity",
+            properties=pika.BasicProperties(delivery_mode=2),
+        )
+
+        deliveries = bus.consume(unique_names["queue"])
+        bodies = set()
+        for _ in range(2):
+            d = next(deliveries)
+            bodies.add(d.body)
+            d.ack()
+        assert bodies == {b"from-timing", b"from-identity"}
+    finally:
+        bus.close()

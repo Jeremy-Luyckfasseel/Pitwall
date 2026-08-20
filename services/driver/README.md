@@ -1,12 +1,23 @@
 # Driver
 
 Pitwall's first Python service (Story 3.1) — the SoR for racing identity, full
-lap-by-lap history, and the canonical all-time personal record (Epic 3). This story
-ships only the **skeleton**: connects to the bus, declares its own `driver.events`
+lap-by-lap history, and the canonical all-time personal record (Epic 3). Story 3.1
+shipped the **skeleton**: connects to the bus, declares its own `driver.events`
 exchange, emits a 1 s `control.heartbeat`, structured JSON logs, and shuts down
-gracefully on `SIGTERM`/`SIGINT`. No domain logic yet — racing profile (3.2), lap
-history (3.3), PR detection (3.4), and the erasure handler (3.7) build on this skeleton
-in later stories.
+gracefully on `SIGTERM`/`SIGINT`.
+
+**Story 3.2 adds Driver's first domain logic: the racing-profile safety net.**
+Driver consumes `lap.recorded` (`timing.events`) and `identity.resolved`
+(`identity.events`) off one durable queue (`driver.profile-safety-net`, its own DLQ
+topology on `driver.dlx`, its own dedicated AMQP connection — separate from the one
+heartbeat/relay publish on). On first sight of a `masterId` it idempotently creates a
+minimal `driver_profiles` row (`racing_number`/`kart_class`/`nickname` all null) and
+publishes `driver.profile_updated` (FR12). The creation is permanent: every later
+trigger for the same `masterId` is a structural no-op — `driver.persistence.profiles
+.insert_minimal_profile` can only ever `INSERT ... WHERE NOT EXISTS`, so a second
+write can never overwrite the first (FR13, "Driver's write wins"), and every skip is
+logged. Lap history (3.3), PR detection (3.4), and the erasure handler (3.7) build on
+this in later stories.
 
 ## Stack
 
@@ -40,9 +51,11 @@ RABBITMQ_HOST=localhost RABBITMQ_USER=pitwall RABBITMQ_PASSWORD=change-me \
 See `docker-compose.yml`'s `driver:` block for the full environment variable list
 (mirrors Timing's/Identity's shape — `RABBITMQ_*`, `HEARTBEAT_INTERVAL_MS`,
 `LOG_LEVEL`, `SERVICE_NAME`, `LIVENESS_FILE`, `CONTRACT_DIR`, `DB_PATH`,
-`OUTBOX_POLL_INTERVAL_MS`, `CONSUME_PREFETCH`, `DLQ_*`). `driver.config.load_config`
-fails fast (lists every missing required variable) rather than assuming a default for
-anything not explicitly optional.
+`OUTBOX_POLL_INTERVAL_MS`, `CONSUME_PREFETCH`, `DLQ_*`, and — Story 3.2 —
+`TIMING_EXCHANGE`/`IDENTITY_EXCHANGE`, the producer exchanges the profile
+safety-net's queue binds to). `driver.config.load_config` fails fast (lists every
+missing required variable) rather than assuming a default for anything not explicitly
+optional.
 
 ## Deploy status
 

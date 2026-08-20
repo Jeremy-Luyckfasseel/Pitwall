@@ -1,0 +1,17 @@
+{
+  "id": "018f4b3e-7c2a-7b1d-9e4a-2f6c8d0a1b3e",
+  "type": "driver.profile_updated",
+  "source": "driver",
+  "schemaVersion": 1,
+  "envelopeVersion": 1,
+  "occurredAt": "2026-06-01T10:05:01.000Z",
+  "correlationId": "d8a3e2c4-1f5b-4a79-ae32-4c6d8f0a2b34",
+  "causationId": "b2e7c6a8-5d9f-4e1d-9c76-8a0b2d4e6f78",
+  "_invalidReason": "masterId is a v1 UUID (version nibble '1', not '4') — the wire rule requires a canonical v4 masterId; a v1 (or any non-v4) UUID must be rejected.",
+  "data": {
+    "masterId": "1a9f7c20-3e84-1d11-9aa2-7b6c5e4d3f21",
+    "racingNumber": "27",
+    "kartClass": "senior",
+    "nickname": "Sofie-S"
+  }
+}

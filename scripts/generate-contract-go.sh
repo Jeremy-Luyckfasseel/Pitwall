@@ -33,7 +33,7 @@ FLAGS="--only-models --tags json --disable-omitempty --disable-omitzero --capita
 OUT=contract/codegen/go
 SCHEMAS=contract/schemas
 
-mkdir -p "$OUT/envelope" "$OUT/bar" "$OUT/billing" "$OUT/control" "$OUT/frontend" "$OUT/identity" "$OUT/privacy" "$OUT/timing"
+mkdir -p "$OUT/envelope" "$OUT/bar" "$OUT/billing" "$OUT/control" "$OUT/driver" "$OUT/frontend" "$OUT/identity" "$OUT/privacy" "$OUT/timing"
 
 echo "generating contract/codegen/go/envelope ..."
 GOWORK=off go run $GO_JSONSCHEMA $FLAGS -p envelope \
@@ -58,6 +58,11 @@ GOWORK=off go run $GO_JSONSCHEMA $FLAGS -p control \
   "$SCHEMAS/control/control.heartbeat.v1.schema.json" \
   "$SCHEMAS/control/privacy.export_ready.v1.schema.json" \
   -o "$OUT/control/types.go"
+
+echo "generating contract/codegen/go/driver ..."
+GOWORK=off go run $GO_JSONSCHEMA $FLAGS -p driver \
+  "$SCHEMAS/driver/driver.profile_updated.v1.schema.json" \
+  -o "$OUT/driver/types.go"
 
 echo "generating contract/codegen/go/frontend ..."
 GOWORK=off go run $GO_JSONSCHEMA $FLAGS -p frontend \
