@@ -205,10 +205,6 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy          # don't start until the broker is ready (no sleeps, AR17)
-      timing:
-        condition: service_started          # so a bare `up` shows profiles flowing (ECST: works fine either order)
-      identity:
-        condition: service_started
     environment:
       RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
       RABBITMQ_PORT: 5672
