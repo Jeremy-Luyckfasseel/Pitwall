@@ -9,11 +9,6 @@ from __future__ import annotations
 import sqlite3
 
 
-def profile_exists(conn: sqlite3.Connection, master_id: str) -> bool:
-    row = conn.execute("SELECT 1 FROM driver_profiles WHERE master_id = ?", (master_id,)).fetchone()
-    return row is not None
-
-
 def insert_minimal_profile(conn: sqlite3.Connection, master_id: str, at: str) -> bool:
     """Creates an all-null-fields row for master_id if (and only if) one does not
     already exist. `INSERT ... WHERE NOT EXISTS` makes it structurally impossible for

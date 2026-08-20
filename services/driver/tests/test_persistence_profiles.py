@@ -3,19 +3,11 @@ Proves the safety-net's core invariant by construction: insert_minimal_profile c
 CREATE but structurally cannot overwrite an existing row (AC3, "Driver's write wins").
 """
 
-from driver.persistence.profiles import insert_minimal_profile, profile_exists
+from driver.persistence.profiles import insert_minimal_profile
 from pitwall.persistence import open_db, within_tx
 
 MASTER_ID = "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21"
 AT = "2026-06-02T14:03:21.512Z"
-
-
-def test_profile_exists_false_for_unknown_master_id(migrated_db_path):
-    conn = open_db(migrated_db_path)
-    try:
-        assert profile_exists(conn, MASTER_ID) is False
-    finally:
-        conn.close()
 
 
 def test_insert_minimal_profile_creates_an_all_null_row(migrated_db_path):
@@ -25,7 +17,6 @@ def test_insert_minimal_profile_creates_an_all_null_row(migrated_db_path):
             created = insert_minimal_profile(conn, MASTER_ID, AT)
         assert created is True  # its own INSERT's effect, not a preceding SELECT (closes a TOCTOU)
 
-        assert profile_exists(conn, MASTER_ID) is True
         row = conn.execute(
             "SELECT master_id, racing_number, kart_class, nickname, created_at, updated_at "
             "FROM driver_profiles WHERE master_id = ?",
