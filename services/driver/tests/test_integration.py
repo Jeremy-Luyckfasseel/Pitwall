@@ -304,6 +304,7 @@ class _ConsumerEnv:
     identity_exchange: str
     queue: str
     observe_queue: str
+    observe_history_queue: str = ""
 
     def deliveries(self):
         return self.consumer_bus.consume(self.queue)
@@ -325,6 +326,15 @@ class _ConsumerEnv:
         d = next(self.observer_bus.consume(self.observe_queue))
         d.ack()
         return json.loads(d.body)
+
+    def observe_history_appended(self, count: int) -> list:
+        out = []
+        for d in self.observer_bus.consume(self.observe_history_queue):
+            d.ack()
+            out.append(json.loads(d.body))
+            if len(out) >= count:
+                break
+        return out
 
     def close(self):
         self.consumer_bus.close()
@@ -358,7 +368,7 @@ def consumer_env(tmp_path, rabbitmq_params, validator: Validator) -> _ConsumerEn
     consumer_bus.declare_dlq_topology(
         ConsumerOptions(
             bindings=[
-                Binding(source_exchange=timing_exchange, routing_keys=["lap.recorded"]),
+                Binding(source_exchange=timing_exchange, routing_keys=["lap.recorded", "session.ended"]),
                 Binding(source_exchange=identity_exchange, routing_keys=["identity.resolved"]),
             ],
             queue_name=queue,
@@ -370,10 +380,13 @@ def consumer_env(tmp_path, rabbitmq_params, validator: Validator) -> _ConsumerEn
     publish_bus = Bus(_amqp_url(rabbitmq_params), driver_exchange)
     publish_bus.connect()
 
+    observe_history_queue = f"test.driver.observe-history.{suffix}"
     observer_bus = Bus(_amqp_url(rabbitmq_params), driver_exchange)
     observer_bus.connect()
     observer_bus._channel.queue_declare(observe_queue, durable=True)
     observer_bus._channel.queue_bind(observe_queue, driver_exchange, "driver.profile_updated")
+    observer_bus._channel.queue_declare(observe_history_queue, durable=True)
+    observer_bus._channel.queue_bind(observe_history_queue, driver_exchange, "driver.history_appended")
 
     log = _RecordingLog()
     handler = Handler(
@@ -389,10 +402,26 @@ def consumer_env(tmp_path, rabbitmq_params, validator: Validator) -> _ConsumerEn
     env = _ConsumerEnv(
         conn=conn, consumer_bus=consumer_bus, publish_bus=publish_bus, observer_bus=observer_bus,
         handler=handler, log=log, timing_exchange=timing_exchange, identity_exchange=identity_exchange,
-        queue=queue, observe_queue=observe_queue,
+        queue=queue, observe_queue=observe_queue, observe_history_queue=observe_history_queue,
     )
     yield env
     env.close()
+
+
+def _session_ended_body(envelope_id: str, rows: list[dict], session_id: str = "sess-1") -> bytes:
+    return json.dumps(
+        {
+            "id": envelope_id,
+            "type": "session.ended",
+            "source": "timing",
+            "schemaVersion": 1,
+            "envelopeVersion": 1,
+            "occurredAt": "2026-08-06T12:05:00.000Z",
+            "correlationId": envelope_id,
+            "causationId": None,
+            "data": {"sessionId": session_id, "endedAt": "2026-08-06T12:05:00.000Z", "summary": rows},
+        }
+    ).encode("utf-8")
 
 
 def test_lap_recorded_for_fresh_master_id_creates_profile_and_publishes_profile_updated(
@@ -472,12 +501,14 @@ def test_identity_resolved_for_fresh_master_id_also_creates_profile(consumer_env
     assert consumer_env.drain_relay_once(validator) == 1
 
 
-def test_second_distinct_trigger_for_an_already_local_master_id_publishes_nothing_and_is_logged(
+def test_second_lap_for_an_already_local_master_id_publishes_no_second_profile_updated(
     consumer_env: _ConsumerEnv, validator: Validator
 ):
-    """AC3: a SECOND, distinct envelope (different id, different lap) for a masterId
-    that already has a local profile must not touch the row and must not publish a
-    second driver.profile_updated -- and the skip must be logged."""
+    """Story-3.2 precedence (AC3), carried into Story 3.3: a SECOND, distinct lap for a
+    masterId that already has a local profile must not touch the profile row and must
+    not publish a second driver.profile_updated. In Story 3.3 the second lap is NO
+    LONGER a pure no-op -- the lap itself IS appended -- so the log line is now
+    "lap appended to history", not "profile already local, skipped"."""
     master_id = str(uuid.uuid4())
     deliveries = consumer_env.deliveries()
 
@@ -500,8 +531,146 @@ def test_second_distinct_trigger_for_an_already_local_master_id_publishes_nothin
         "SELECT master_id, racing_number, kart_class, nickname FROM driver_profiles WHERE master_id = ?",
         (master_id,),
     ).fetchone()
-    assert tuple(row) == (master_id, None, None, None)  # untouched
+    assert tuple(row) == (master_id, None, None, None)  # profile untouched
     assert outbox_fetch_pending(consumer_env.conn, 10) == []  # no second row enqueued
     sent_count = consumer_env.conn.execute("SELECT COUNT(*) FROM outbox WHERE status='sent'").fetchone()[0]
-    assert sent_count == 1  # still just the one -- no second publish
-    assert consumer_env.log.has("info", "profile already local, skipped")
+    assert sent_count == 1  # still just the one profile_updated -- no second publish
+    # Both laps ARE stored (the second lap is not dropped).
+    laps = consumer_env.conn.execute(
+        "SELECT lap_number FROM driver_laps WHERE master_id = ? AND session_id = ? ORDER BY lap_number",
+        (master_id, "sess-1"),
+    ).fetchall()
+    assert [r[0] for r in laps] == [1, 2]
+    assert consumer_env.log.has("info", "lap appended to history")
+
+
+# --- Consumer (Story 3.3): lap history + session summaries, end to end ----------------
+
+
+def test_lap_recorded_appends_a_lap_row_end_to_end(consumer_env: _ConsumerEnv, validator: Validator):
+    """AC1: a real lap.recorded through the real broker appends a driver_laps row (and,
+    via the safety net, a driver_profiles row -- AC3)."""
+    master_id = str(uuid.uuid4())
+    envelope_id = str(uuid.uuid4())
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="lap.recorded",
+        body=_lap_recorded_body(envelope_id, master_id, lap_number=7),
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+
+    consumer_env.handler.process(next(consumer_env.deliveries()))
+
+    assert consumer_env.conn.execute(
+        "SELECT master_id FROM driver_profiles WHERE master_id = ?", (master_id,)
+    ).fetchone() is not None
+    lap = consumer_env.conn.execute(
+        "SELECT lap_number, lap_time_ms, source_event_id FROM driver_laps WHERE master_id = ? AND session_id = ?",
+        (master_id, "sess-1"),
+    ).fetchone()
+    assert tuple(lap) == (7, 42000, envelope_id)
+
+
+def test_redelivered_lap_recorded_appends_no_second_lap_row(consumer_env: _ConsumerEnv, validator: Validator):
+    """AC1 idempotency: the SAME lap.recorded redelivered stores no second lap row."""
+    master_id = str(uuid.uuid4())
+    envelope_id = str(uuid.uuid4())
+    body = _lap_recorded_body(envelope_id, master_id, lap_number=7)
+
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="lap.recorded", body=body,
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    deliveries = consumer_env.deliveries()
+    consumer_env.handler.process(next(deliveries))
+
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="lap.recorded", body=body,
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    consumer_env.handler.process(next(deliveries))
+
+    count = consumer_env.conn.execute(
+        "SELECT COUNT(*) FROM driver_laps WHERE master_id = ? AND session_id = ?", (master_id, "sess-1")
+    ).fetchone()[0]
+    assert count == 1
+
+
+def test_session_ended_stores_summaries_and_publishes_history_per_driver_end_to_end(
+    consumer_env: _ConsumerEnv, validator: Validator
+):
+    """AC2/AC3: a real session.ended with a 2-row summary (one fresh masterId, one that
+    already has a profile) stores 2 summaries and publishes 2 driver.history_appended;
+    the fresh masterId also gains a driver_profiles row."""
+    existing_id = str(uuid.uuid4())
+    fresh_id = str(uuid.uuid4())
+
+    # Give `existing_id` a profile first via a lap.
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="lap.recorded",
+        body=_lap_recorded_body(str(uuid.uuid4()), existing_id, lap_number=1),
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    deliveries = consumer_env.deliveries()
+    consumer_env.handler.process(next(deliveries))
+    consumer_env.drain_relay_once(validator)  # drain the profile_updated so it doesn't clog
+
+    rows = [
+        {"masterId": existing_id, "bestLapMs": 41980, "lapCount": 12},
+        {"masterId": fresh_id, "bestLapMs": 43110, "lapCount": 9},
+    ]
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="session.ended",
+        body=_session_ended_body(str(uuid.uuid4()), rows),
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    consumer_env.handler.process(next(deliveries))
+
+    # Two summaries stored.
+    stored = {
+        r[0]: (r[1], r[2])
+        for r in consumer_env.conn.execute(
+            "SELECT master_id, best_lap_ms, lap_count FROM driver_session_summaries WHERE session_id = ?",
+            ("sess-1",),
+        ).fetchall()
+    }
+    assert stored == {existing_id: (41980, 12), fresh_id: (43110, 9)}
+    # The fresh masterId gained a profile (AC3).
+    assert consumer_env.conn.execute(
+        "SELECT master_id FROM driver_profiles WHERE master_id = ?", (fresh_id,)
+    ).fetchone() is not None
+
+    # Drain the outbox and observe exactly 2 driver.history_appended on the bus.
+    consumer_env.drain_relay_once(validator)
+    observed = consumer_env.observe_history_appended(2)
+    by_master = {m["data"]["masterId"]: m["data"] for m in observed}
+    assert by_master[existing_id] == {"masterId": existing_id, "sessionId": "sess-1", "bestLapMs": 41980, "lapCount": 12}
+    assert by_master[fresh_id] == {"masterId": fresh_id, "sessionId": "sess-1", "bestLapMs": 43110, "lapCount": 9}
+
+
+def test_redelivered_session_ended_publishes_no_second_history(consumer_env: _ConsumerEnv, validator: Validator):
+    """AC2 idempotency: the SAME session.ended redelivered publishes no second
+    history_appended and stores no duplicate summary rows."""
+    master_id = str(uuid.uuid4())
+    body = _session_ended_body(str(uuid.uuid4()), [{"masterId": master_id, "bestLapMs": 41980, "lapCount": 12}])
+
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="session.ended", body=body,
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    deliveries = consumer_env.deliveries()
+    consumer_env.handler.process(next(deliveries))
+    assert consumer_env.drain_relay_once(validator) == 2  # profile_updated + history_appended
+    sent_after_first = consumer_env.conn.execute("SELECT COUNT(*) FROM outbox WHERE status='sent'").fetchone()[0]
+
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="session.ended", body=body,
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    consumer_env.handler.process(next(deliveries))
+
+    assert outbox_fetch_pending(consumer_env.conn, 10) == []  # nothing new enqueued
+    sent_after_redelivery = consumer_env.conn.execute("SELECT COUNT(*) FROM outbox WHERE status='sent'").fetchone()[0]
+    assert sent_after_redelivery == sent_after_first  # no second publish
+    assert consumer_env.conn.execute(
+        "SELECT COUNT(*) FROM driver_session_summaries WHERE master_id = ?", (master_id,)
+    ).fetchone()[0] == 1

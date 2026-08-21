@@ -10,12 +10,19 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from driver.consumer import IDENTITY_RESOLVED_TYPE, LAP_RECORDED_TYPE, Handler
+from driver.consumer import (
+    IDENTITY_RESOLVED_TYPE,
+    LAP_RECORDED_TYPE,
+    SESSION_ENDED_TYPE,
+    Handler,
+)
 from pitwall.dlq import Policy
 from pitwall.persistence import open_db, outbox_fetch_pending
 
 MASTER_ID = "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21"
+OTHER_ID = "2b8e6d31-4f95-4e22-8bb3-6c7d5e4f3a10"
 CORRELATION_ID = "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55"
+SESSION = "session-2026-05-31-evening-heat-3"
 NOW = datetime(2026, 6, 2, 14, 3, 21, 512000, tzinfo=UTC)
 
 
@@ -56,7 +63,26 @@ class FakeLog:
         return any(level == lvl and needle in msg for lvl, msg, _ in self.lines)
 
 
-def _envelope_bytes(envelope_id: str, event_type: str, master_id: str, correlation_id: str = CORRELATION_ID) -> bytes:
+def _envelope_bytes(
+    envelope_id: str,
+    event_type: str,
+    master_id: str,
+    correlation_id: str = CORRELATION_ID,
+    *,
+    lap_number: int = 7,
+) -> bytes:
+    if event_type == LAP_RECORDED_TYPE:
+        # A REAL lap.recorded carries the full lap payload (all schema-required); the
+        # consumer now needs it to append the lap, not just the safety-net masterId.
+        data = {
+            "masterId": master_id,
+            "sessionId": SESSION,
+            "lapNumber": lap_number,
+            "lapTimeMs": 42318,
+            "at": "2026-05-31T14:03:21.500Z",
+        }
+    else:
+        data = {"masterId": master_id}
     return json.dumps(
         {
             "id": envelope_id,
@@ -67,9 +93,32 @@ def _envelope_bytes(envelope_id: str, event_type: str, master_id: str, correlati
             "occurredAt": "2026-06-02T14:03:21.512Z",
             "correlationId": correlation_id,
             "causationId": None,
-            "data": {"masterId": master_id},
+            "data": data,
         }
     ).encode("utf-8")
+
+
+def _session_ended_bytes(envelope_id: str, rows: list[dict], session_id: str = SESSION, correlation_id: str = CORRELATION_ID) -> bytes:
+    return json.dumps(
+        {
+            "id": envelope_id,
+            "type": SESSION_ENDED_TYPE,
+            "source": "timing",
+            "schemaVersion": 1,
+            "envelopeVersion": 1,
+            "occurredAt": "2026-05-31T14:05:00.000Z",
+            "correlationId": correlation_id,
+            "causationId": None,
+            "data": {"sessionId": session_id, "endedAt": "2026-05-31T14:05:00.000Z", "summary": rows},
+        }
+    ).encode("utf-8")
+
+
+def _laps(conn, master_id=MASTER_ID, session_id=SESSION):
+    return conn.execute(
+        "SELECT lap_number FROM driver_laps WHERE master_id = ? AND session_id = ? ORDER BY lap_number",
+        (master_id, session_id),
+    ).fetchall()
 
 
 @pytest.fixture()
@@ -105,11 +154,13 @@ def test_lap_recorded_for_unknown_master_id_creates_profile_and_enqueues_profile
     assert delivery.nacked is None
     row = conn.execute("SELECT master_id FROM driver_profiles WHERE master_id = ?", (MASTER_ID,)).fetchone()
     assert row is not None
+    # AC1: the lap itself was appended to history (Story 3.3), in the same delivery.
+    assert [r[0] for r in _laps(conn)] == [7]
     outbox = outbox_fetch_pending(conn, 10)
-    assert len(outbox) == 1
+    assert len(outbox) == 1  # only the safety net's driver.profile_updated (lap append enqueues nothing)
     assert outbox[0].routing_key == "driver.profile_updated"
     assert notified == [1]
-    assert log.has("info", "minimal racing profile created")
+    assert log.has("info", "lap appended to history")
 
 
 def test_identity_resolved_for_unknown_master_id_also_creates_profile(conn):
@@ -208,7 +259,7 @@ def test_processing_failure_retries_then_parks_at_the_cap(conn):
 
     handler = Handler(
         validate=lambda body: None,
-        conn=None,  # forces ensure_minimal_profile to raise (no connection)
+        conn=None,  # forces the transactional core (process_lap_recorded) to raise (no connection)
         source="driver",
         policy=Policy(max_attempts=2, base_ms=100, multiplier=2, max_ms=1000),
         log=log,
@@ -224,8 +275,8 @@ def test_processing_failure_retries_then_parks_at_the_cap(conn):
     assert parked == []
     assert first.acked is True
     # Confirms the failure is specifically conn=None's AttributeError from within_tx's
-    # `conn.execute("BEGIN")` -- not some unrelated bug elsewhere in ensure_minimal_profile
-    # that happens to also raise.
+    # `conn.execute("BEGIN")` -- not some unrelated bug elsewhere in the transactional
+    # core that happens to also raise.
     warn_fields = next(fields for level, _, fields in log.lines if level == "warn")
     assert "NoneType" in warn_fields["error"] and "execute" in warn_fields["error"]
 
@@ -299,4 +350,139 @@ def test_unhandled_event_type_is_acked_and_ignored(conn):
     handler.process(delivery)
 
     assert delivery.acked is True
+    assert conn.execute("SELECT COUNT(*) FROM driver_profiles").fetchone()[0] == 0
+
+
+# ===========================================================================
+# Story 3.3 — lap-history append (AC1) and session.ended (AC2/AC3).
+# ===========================================================================
+def _summaries(conn, session_id=SESSION):
+    return [
+        tuple(r)
+        for r in conn.execute(
+            "SELECT master_id, best_lap_ms, lap_count FROM driver_session_summaries "
+            "WHERE session_id = ? ORDER BY master_id",
+            (session_id,),
+        ).fetchall()
+    ]
+
+
+def test_lap_recorded_for_existing_profile_still_appends_the_lap(conn):
+    """AC1 is independent of the safety net: a lap for a masterId that ALREADY has a
+    profile appends no profile row and publishes no driver.profile_updated, but the lap
+    is still stored."""
+    log = FakeLog()
+    handler = _handler(conn, log)
+    # First lap creates the profile (+ profile_updated).
+    handler.process(FakeDelivery(body=_envelope_bytes("00000000-0000-0000-0000-000000000101", LAP_RECORDED_TYPE, MASTER_ID, lap_number=7)))
+    assert len(outbox_fetch_pending(conn, 10)) == 1
+
+    # Second, distinct lap (different envelope id, different lap number) for the same
+    # driver: no new profile, no new publish, but the lap accumulates.
+    handler.process(FakeDelivery(body=_envelope_bytes("00000000-0000-0000-0000-000000000102", LAP_RECORDED_TYPE, MASTER_ID, lap_number=8)))
+    assert len(outbox_fetch_pending(conn, 10)) == 1  # still just the first profile_updated
+    assert [r[0] for r in _laps(conn)] == [7, 8]
+
+
+def test_redelivered_lap_recorded_is_not_double_counted(conn):
+    """FR9/NFR3: the SAME lap.recorded envelope redelivered is a full no-op via the
+    inbox -- no second lap row."""
+    log = FakeLog()
+    handler = _handler(conn, log)
+    body = _envelope_bytes("00000000-0000-0000-0000-000000000103", LAP_RECORDED_TYPE, MASTER_ID, lap_number=7)
+    handler.process(FakeDelivery(body=body))
+    handler.process(FakeDelivery(body=body))  # redelivery
+    assert [r[0] for r in _laps(conn)] == [7]
+
+
+def test_session_ended_stores_summaries_and_publishes_one_history_per_driver(conn):
+    """AC2/AC3: each summary row -> a profile (safety net), a stored summary, and one
+    driver.history_appended. Two fresh drivers -> 2 of each."""
+    log = FakeLog()
+    notified = []
+    handler = _handler(conn, log, notify=lambda: notified.append(1))
+    rows = [
+        {"masterId": MASTER_ID, "bestLapMs": 41980, "lapCount": 12},
+        {"masterId": OTHER_ID, "bestLapMs": 43110, "lapCount": 9},
+    ]
+    handler.process(FakeDelivery(body=_session_ended_bytes("00000000-0000-0000-0000-000000000201", rows)))
+
+    # Two profiles created by the safety net (AC3).
+    assert conn.execute("SELECT COUNT(*) FROM driver_profiles").fetchone()[0] == 2
+    # Two summaries stored.
+    assert _summaries(conn) == [(MASTER_ID, 41980, 12), (OTHER_ID, 43110, 9)]
+    # 2 profile_updated + 2 history_appended enqueued.
+    outbox = outbox_fetch_pending(conn, 10)
+    kinds = sorted(o.routing_key for o in outbox)
+    assert kinds == ["driver.history_appended", "driver.history_appended", "driver.profile_updated", "driver.profile_updated"]
+    assert notified == [1]
+    assert log.has("info", "session summaries stored and history appended")
+
+
+def test_session_ended_row_for_existing_profile_stores_summary_without_new_profile(conn):
+    log = FakeLog()
+    handler = _handler(conn, log)
+    # Pre-create MASTER_ID's profile via a lap.
+    handler.process(FakeDelivery(body=_envelope_bytes("00000000-0000-0000-0000-000000000202", LAP_RECORDED_TYPE, MASTER_ID)))
+    assert len(outbox_fetch_pending(conn, 10)) == 1  # profile_updated
+
+    rows = [{"masterId": MASTER_ID, "bestLapMs": 41980, "lapCount": 12}]
+    handler.process(FakeDelivery(body=_session_ended_bytes("00000000-0000-0000-0000-000000000203", rows)))
+
+    assert conn.execute("SELECT COUNT(*) FROM driver_profiles").fetchone()[0] == 1  # no new profile
+    assert _summaries(conn) == [(MASTER_ID, 41980, 12)]
+    # +1 history_appended only (no second profile_updated).
+    outbox = outbox_fetch_pending(conn, 10)
+    assert sorted(o.routing_key for o in outbox) == ["driver.history_appended", "driver.profile_updated"]
+
+
+def test_redelivered_session_ended_is_a_no_op(conn):
+    """AC2 idempotency: the same session.ended redelivered publishes no second
+    history_appended and stores no duplicate summary rows."""
+    log = FakeLog()
+    handler = _handler(conn, log)
+    rows = [{"masterId": MASTER_ID, "bestLapMs": 41980, "lapCount": 12}]
+    body = _session_ended_bytes("00000000-0000-0000-0000-000000000204", rows)
+    handler.process(FakeDelivery(body=body))
+    first_count = len(outbox_fetch_pending(conn, 10))
+
+    handler.process(FakeDelivery(body=body))  # redelivery
+    assert len(outbox_fetch_pending(conn, 10)) == first_count  # nothing new
+    assert conn.execute("SELECT COUNT(*) FROM driver_session_summaries").fetchone()[0] == 1
+    assert log.has("debug", "duplicate envelope ignored")
+
+
+def test_session_ended_with_empty_summary_acks_and_stores_nothing(conn):
+    log = FakeLog()
+    handler = _handler(conn, log)
+    delivery = FakeDelivery(body=_session_ended_bytes("00000000-0000-0000-0000-000000000205", []))
+
+    handler.process(delivery)
+
+    assert delivery.acked is True
+    assert conn.execute("SELECT COUNT(*) FROM driver_session_summaries").fetchone()[0] == 0
+    assert len(outbox_fetch_pending(conn, 10)) == 0
+
+
+def test_session_ended_summary_row_missing_master_id_is_parked(conn):
+    log = FakeLog()
+    parked = []
+    handler = Handler(
+        validate=lambda body: None,  # stub validation so the malformed row reaches parsing
+        conn=conn,
+        source="driver",
+        policy=Policy(max_attempts=3, base_ms=100, multiplier=2, max_ms=1000),
+        log=log,
+        park=lambda body, reason: parked.append(reason),
+        now=lambda: NOW,
+    )
+    rows = [{"bestLapMs": 41980, "lapCount": 12}]  # no masterId
+    delivery = FakeDelivery(body=_session_ended_bytes("00000000-0000-0000-0000-000000000206", rows))
+
+    handler.process(delivery)
+
+    assert parked == ["malformed-summary-row"]
+    assert delivery.acked is True
+    # Parked BEFORE any write -- nothing partially stored.
+    assert conn.execute("SELECT COUNT(*) FROM driver_session_summaries").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM driver_profiles").fetchone()[0] == 0
