@@ -26,6 +26,9 @@ const HeartbeatRoutingKey = libmsg.HeartbeatRoutingKey
 // FormatWireTime renders t as a contract-compliant timestamp string.
 func FormatWireTime(t time.Time) string { return libmsg.FormatWireTime(t) }
 
+// ParseWireTime parses a canonical wire-format timestamp (the inverse of FormatWireTime).
+func ParseWireTime(s string) (time.Time, error) { return libmsg.ParseWireTime(s) }
+
 // NewHeartbeatEnvelope builds a fully-populated control.heartbeat envelope.
 func NewHeartbeatEnvelope(service, instanceID, correlationID string, now time.Time) Envelope {
 	return libmsg.NewHeartbeatEnvelope(service, instanceID, correlationID, now)
