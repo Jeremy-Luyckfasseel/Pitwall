@@ -40,6 +40,29 @@ type DriverHistoryAppendedV1SchemaJsonBestLapMs *int
 // if unknown; always present as a key.
 type DriverHistoryAppendedV1SchemaJsonLapCount *int
 
+// Driver (system of record for the racing identity) confirmed a new canonical
+// all-time personal record for a driver, computed authoritatively from its own lap
+// history (Story 3.4, FR11 / Q&A Round 37 / Q37.4). Published to the
+// 'driver.events' exchange with routing key 'driver.pr_updated' — one event per
+// real change to the canonical PR (idempotent: an already-confirmed PR
+// re-publishes nothing). Timing consumes it to refresh its local PR copy (FR37);
+// Frontend updates its read-model.
+type DriverPrUpdatedV1SchemaJson struct {
+	// The confirmed canonical all-time best lap time for this driver, in
+	// milliseconds.
+	LapTimeMs int `json:"lapTimeMs"`
+
+	// Canonical masterId issued by Identity. Lowercase canonical UUID v4 (version
+	// nibble 4, variant nibble [89ab]); the pattern is enforced (format is
+	// annotation-only).
+	MasterID string `json:"masterId"`
+
+	// When the record-setting lap happened (the 'at' of that lap). RFC3339 UTC,
+	// exactly 3-digit milliseconds, literal 'Z' (AR9). The pattern is enforced
+	// (format is annotation-only).
+	SetAt string `json:"setAt"`
+}
+
 // Driver's racing profile (identity/preference fields) for a masterId changed, or
 // was created for the first time via the minimal-profile safety net. Published to
 // the 'driver.events' exchange with routing key 'driver.profile_updated'. Field
