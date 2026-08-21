@@ -82,7 +82,7 @@ Schemas in `/contract/schemas`. `→` lists primary consumers.
 | `driver.checked_in` | Driver scanned at the **entry gate** | `masterId`, `sessionId?`, `at`, `gate` | Billing (open tab), Booking, Control Room |
 | `lap.recorded` | Valid crossing at the **start-finish line** | `masterId`, `sessionId`, `lapNumber`, `lapTimeMs`, `at` | Driver, Leaderboard, Control Room |
 | `session.started` | **Actual** session start (physical) | `sessionId`, `startedAt` | Booking, Leaderboard, Billing |
-| `session.ended` | **Actual** session end + summary | `sessionId`, `endedAt`, `summary[]` | Booking, Billing, Driver, Mailing, Leaderboard |
+| `session.ended` | **Actual** session end + summary | `sessionId`, `endedAt`, `summary[]` (each row: `masterId`, `bestLapMs`, `lapCount`) | Booking, Billing, Driver, Mailing, Leaderboard |
 | `personal_record.broken` | A driver beat their all-time PR | `masterId`, `sessionId`, `lapTimeMs`, `previousMs` | Driver, Mailing |
 | `scanner.offline` | Scanner hardware went silent | `scannerId`, `since`, `gapFrom` | Control Room |
 | `scanner.online` | Scanner recovered | `scannerId`, `at` | Control Room |
@@ -98,7 +98,7 @@ Schemas in `/contract/schemas`. `→` lists primary consumers.
 |---|---|---|---|
 | `driver.profile_updated` | Racing profile changed | `masterId`, racing fields | Frontend, Leaderboard, Timing |
 | `driver.pr_updated` | Canonical all-time PR confirmed | `masterId`, `lapTimeMs`, `setAt` | Timing (refresh local PR copy), Frontend |
-| `driver.history_appended` | Session result stored | `masterId`, `sessionId`, summary | Frontend |
+| `driver.history_appended` | Session result stored (one per driver) | `masterId`, `sessionId`, `bestLapMs`, `lapCount` | Frontend |
 
 ### `crm.events`
 | Routing key | Meaning | Key payload | → Consumers |
