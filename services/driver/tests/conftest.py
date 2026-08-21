@@ -12,7 +12,8 @@ _SERVICE_DIR = Path(__file__).resolve().parent.parent
 @pytest.fixture()
 def migrated_db_path(tmp_path) -> str:
     """A fresh SQLite file with every Alembic migration applied (outbox/inbox +
-    driver_profiles), for tests that need real persistence without a broker."""
+    driver_profiles + driver_laps/driver_session_summaries), for tests that need real
+    persistence without a broker."""
     db_path = str(tmp_path / "driver.db")
     cfg = AlembicConfig(str(_SERVICE_DIR / "alembic.ini"))
     cfg.set_main_option("script_location", str(_SERVICE_DIR / "migrations"))

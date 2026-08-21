@@ -1,8 +1,9 @@
 """Driver's entrypoint: runs its own Alembic migrations, connects to the bus (retried,
 supervised across broker restarts), declares its own durable exchange, emits a 1 s
-heartbeat, drains its own outbox via the relay, consumes the minimal-profile safety
-net (Story 3.2 -- lap.recorded off timing.events + identity.resolved off
-identity.events, one queue), logs structured JSON, and shuts down gracefully on
+heartbeat, drains its own outbox via the relay, consumes lap.recorded + session.ended
+off timing.events and identity.resolved off identity.events (one queue) -- running the
+minimal-profile safety net (Story 3.2), appending lap history, and storing per-session
+summaries with driver.history_appended (Story 3.3), logs structured JSON, and shuts down gracefully on
 SIGTERM/SIGINT (mirrors services/timing/cmd/timing/main.go's Story-1.3 shape plus its
 Story-1.4/1.10 outbox-relay + reconnect-supervisor shape, translated to Python's
 threading model — see pitwall.messaging.run_with_reconnect's docstring for why this
@@ -34,7 +35,7 @@ from pitwall.relay import Relay
 from pitwall.validate import Validator, resolve_contract_dir
 
 from driver.config import ConfigError, load_config
-from driver.consumer import IDENTITY_RESOLVED_TYPE, LAP_RECORDED_TYPE, Handler
+from driver.consumer import IDENTITY_RESOLVED_TYPE, LAP_RECORDED_TYPE, SESSION_ENDED_TYPE, Handler
 
 DRIVER_EXCHANGE = "driver.events"
 CONSUMER_QUEUE = "driver.profile-safety-net"
@@ -196,7 +197,10 @@ def main() -> int:
                 consumer_bus.declare_dlq_topology(
                     ConsumerOptions(
                         bindings=[
-                            Binding(source_exchange=cfg.timing_exchange, routing_keys=[LAP_RECORDED_TYPE]),
+                            Binding(
+                                source_exchange=cfg.timing_exchange,
+                                routing_keys=[LAP_RECORDED_TYPE, SESSION_ENDED_TYPE],
+                            ),
                             Binding(source_exchange=cfg.identity_exchange, routing_keys=[IDENTITY_RESOLVED_TYPE]),
                         ],
                         queue_name=CONSUMER_QUEUE,

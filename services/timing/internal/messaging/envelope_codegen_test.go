@@ -129,11 +129,13 @@ func TestSessionEndedData_MatchesGeneratedDTO(t *testing.T) {
 			{MasterID: "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21", BestLapMs: 41000, LapCount: 10},
 		},
 	}
+	bestLapMs := int(handWritten.Summary[0].BestLapMs)
+	lapCount := handWritten.Summary[0].LapCount
 	generated := timingcodegen.SessionEndedV1SchemaJson{
 		SessionID: handWritten.SessionID,
 		EndedAt:   handWritten.EndedAt,
 		Summary: []timingcodegen.SessionEndedV1SchemaJsonSummaryElem{
-			{"masterId": handWritten.Summary[0].MasterID, "bestLapMs": float64(handWritten.Summary[0].BestLapMs), "lapCount": float64(handWritten.Summary[0].LapCount)},
+			{MasterID: handWritten.Summary[0].MasterID, BestLapMs: &bestLapMs, LapCount: &lapCount},
 		},
 	}
 
@@ -236,9 +238,12 @@ func TestDecodeSessionEnded_MatchesGeneratedDTO(t *testing.T) {
 	}
 	for i, row := range handWritten.Summary {
 		gen := generated.Summary[i]
-		if row.MasterID != gen["masterId"] ||
-			float64(row.BestLapMs) != gen["bestLapMs"] ||
-			float64(row.LapCount) != gen["lapCount"] {
+		if gen.BestLapMs == nil || gen.LapCount == nil {
+			t.Fatalf("summary[%d] generated DTO has nil bestLapMs/lapCount: %+v", i, gen)
+		}
+		if row.MasterID != gen.MasterID ||
+			row.BestLapMs != int64(*gen.BestLapMs) ||
+			row.LapCount != *gen.LapCount {
 			t.Errorf("summary[%d] diverges: hand-written=%+v generated=%+v", i, row, gen)
 		}
 	}

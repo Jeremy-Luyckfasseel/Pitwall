@@ -151,6 +151,14 @@ def test_session_ended_summary_may_be_empty_or_populated():
     assert errors_for(with_data("session.ended", summary=populated)) == []
 
 
+def test_session_ended_summary_row_requires_only_masterId_and_stays_tolerant():
+    # Story 3.3 / Q36.1: masterId is the only REQUIRED summary-item field; bestLapMs
+    # and lapCount are optional, and unknown additive fields are still accepted
+    # (tolerant reader — no additionalProperties:false on the item).
+    assert errors_for(with_data("session.ended", summary=[{"masterId": LAP_DATA["masterId"]}])) == []
+    assert errors_for(with_data("session.ended", summary=[{"masterId": LAP_DATA["masterId"], "futureField": "x"}])) == []
+
+
 def test_tolerant_reader_allows_unknown_additive_field():
     # Additive evolution: an unknown (even snake_case) field that does NOT replace
     # a required one must be accepted (tolerant reader, no additionalProperties:false).
@@ -263,6 +271,18 @@ DATA_BAD_CASES = {
     "se-summary-object": ("session.ended", {"summary": {}}),
     "se-summary-string": ("session.ended", {"summary": "x"}),
     "se-summary-number": ("session.ended", {"summary": 5}),
+    # summary[] item shape pinned by Story 3.3 (Q&A Round 36 / Q36.1): masterId required
+    # (same UUID-v4 pattern as everywhere else); bestLapMs/lapCount typed when present.
+    "se-summary-row-missing-masterId": ("session.ended", {"summary": [{"bestLapMs": 41980, "lapCount": 12}]}),
+    "se-summary-row-masterId-not-uuid": ("session.ended", {"summary": [{"masterId": "not-a-uuid", "bestLapMs": 41980, "lapCount": 12}]}),
+    "se-summary-row-masterId-uppercase": ("session.ended", {"summary": [{"masterId": UPPER_UUID, "bestLapMs": 41980, "lapCount": 12}]}),
+    "se-summary-row-masterId-wrong-version": ("session.ended", {"summary": [{"masterId": "1a9f7c20-3e84-1d11-9aa2-7b6c5e4d3f21", "bestLapMs": 41980}]}),
+    "se-summary-row-masterId-wrong-variant": ("session.ended", {"summary": [{"masterId": "1a9f7c20-3e84-4d11-1aa2-7b6c5e4d3f21", "bestLapMs": 41980}]}),
+    "se-summary-row-bestLapMs-zero": ("session.ended", {"summary": [{"masterId": LAP_DATA["masterId"], "bestLapMs": 0}]}),
+    "se-summary-row-bestLapMs-float": ("session.ended", {"summary": [{"masterId": LAP_DATA["masterId"], "bestLapMs": 41980.5}]}),
+    "se-summary-row-bestLapMs-string": ("session.ended", {"summary": [{"masterId": LAP_DATA["masterId"], "bestLapMs": "41980"}]}),
+    "se-summary-row-lapCount-negative": ("session.ended", {"summary": [{"masterId": LAP_DATA["masterId"], "lapCount": -1}]}),
+    "se-summary-row-lapCount-float": ("session.ended", {"summary": [{"masterId": LAP_DATA["masterId"], "lapCount": 12.5}]}),
     "se-snake-endedAt": ("session.ended", {"endedAt": _DELETE, "ended_at": SE_DATA["endedAt"]}),
     "se-snake-sessionId": ("session.ended", {"sessionId": _DELETE, "session_id": "s"}),
 }

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://pitwall/contract/timing/session.ended.v1.schema.json",
   "title": "timing / session.ended (v1) data payload",
-  "description": "The ACTUAL (physical) end of a session plus its summary, emitted by Timing. Published to the 'timing.events' exchange with routing key 'session.ended'. Consumers: Booking, Billing (close tab), Driver (store summary), Mailing (session summary), Leaderboard (mark finished). NOTE: the per-item shape of `summary[]` is NOT pinned by the source corpus and is intentionally left tolerant (additionalProperties:true, no required item fields) — no Epic-1 consumer reads summary contents. Pin the item fields when Driver/Mailing actually consume them (Epic 3/10). Confirm-at-build, do not invent.",
+  "description": "The ACTUAL (physical) end of a session plus its summary, emitted by Timing. Published to the 'timing.events' exchange with routing key 'session.ended'. Consumers: Booking, Billing (close tab), Driver (store summary), Mailing (session summary), Leaderboard (mark finished). The per-item shape of `summary[]` was pinned by Driver's consume point (Story 3.3, Q&A Round 36 / Q36.1): each row requires `masterId` (canonical UUID v4) and carries optional `bestLapMs` + `lapCount` — the exact shape Timing already emits. The item object stays tolerant (no additionalProperties:false) so a later consumer (e.g. Mailing, Epic 10) may pin further fields additively without breaking existing producers/consumers.",
   "type": "object",
   "required": ["sessionId", "endedAt", "summary"],
   "properties": {
@@ -17,9 +17,28 @@
     },
     "summary": {
       "type": "array",
-      "description": "Per-session result rows (e.g. one per driver, with lap times). Item shape intentionally unpinned for v1 — tolerant object.",
+      "description": "Per-session result rows, one per driver. Item shape pinned in v1 (Story 3.3, Q36.1): masterId required, bestLapMs/lapCount optional; the item stays a tolerant object (additive fields allowed).",
       "items": {
-        "type": "object"
+        "type": "object",
+        "required": ["masterId"],
+        "properties": {
+          "masterId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "description": "Canonical masterId issued by Identity. Lowercase canonical UUID v4 (version nibble 4, variant nibble [89ab]); the pattern is enforced (format is annotation-only)."
+          },
+          "bestLapMs": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The driver's best (fastest) valid lap this session, in milliseconds. Optional — absent if the driver logged no counted lap."
+          },
+          "lapCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of counted laps the driver logged this session (out-lap excluded). Optional."
+          }
+        }
       }
     }
   }

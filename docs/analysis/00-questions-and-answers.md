@@ -1470,3 +1470,56 @@ overwrites an already-set racing field with a default, and that refusal-to-overw
 logged as the "conflict." A real `profile.edit_requested` consumer is deferred to whichever future
 story actually wires Frontend/CRM (Epic 5/6) — this is forward-compatible (the schema and field names
 are already fixed by Q35.1) but not built here.
+
+---
+
+## Round 36 — Story 3.3 Driver lap history & session summaries: pin the summary shape, `driver.history_appended` granularity, unknown-driver safety net (2026-08-21)
+
+> Surfaced while drafting **Story 3.3** (Lap-by-lap history and session summaries). Three
+> decisions are not answered anywhere and two are explicitly flagged "do not invent" by the
+> corpus itself: (1) `contract/schemas/timing/session.ended.v1.schema.json` deliberately leaves
+> `summary[]`'s per-item shape tolerant with an inline note — "Pin the item fields when
+> Driver/Mailing actually consume them (Epic 3/10). Confirm-at-build, do not invent." Story 3.3
+> is Driver's consume point. (2) `driver.history_appended` has no schema yet — only a bus-catalog
+> row (`masterId`, `sessionId`, summary). (3) Story 3.2 built a minimal-profile safety net (FR12,
+> create-if-absent) so a `lap.recorded` for a not-yet-local `masterId` is never dropped; a
+> `session.ended` summary row can name an equally-unknown `masterId`. All asked per the golden
+> rule (CLAUDE.md §0).
+
+**Q36.1 — How should `session.ended.summary[]`'s per-item shape be handled now that Driver consumes it?**
+A: **Pin the three de-facto fields, keep the item object tolerant.** Update
+`contract/schemas/timing/session.ended.v1.schema.json` so each `summary[]` item **requires**
+`masterId` (same UUID-v4 pattern as every other `masterId` in the corpus) and documents
+`bestLapMs` (integer ms) and `lapCount` (integer) — the exact shape Timing already emits
+(`services/timing/internal/messaging/envelope.go`'s `SessionSummaryRow`) and the committed
+example already shows. **No `additionalProperties: false`** on the item (tolerant reader /
+additive evolution preserved — a future producer may add fields; Mailing in Epic 10 may pin more).
+`bestLapMs`/`lapCount` stay **not-required** so the schema is a strict superset of today's wire
+traffic and no existing producer/fixture breaks. Driver stores exactly `masterId` + `bestLapMs` +
+`lapCount` per row.
+*Rejected:* leaving it fully unpinned — the corpus explicitly asked for pinning at the consume
+point, and pinning `masterId` as required is what lets Driver key the per-driver summary safely.
+
+**Q36.2 — What is `driver.history_appended`'s granularity and payload?**
+A: **One event per driver-row, not one per session.** For each row in the consumed
+`session.ended.summary[]`, Driver publishes a separate
+`driver.history_appended { masterId, sessionId, bestLapMs, lapCount }` (a full envelope,
+`causationId` = the triggering `session.ended` envelope id). This matches the bus catalog's
+**singular** `masterId` (`docs/analysis/02-message-bus-and-contracts.md#driver.events`) and lets
+Frontend (the sole consumer) key its per-driver read-model update off `masterId` without unpacking
+an array. `bestLapMs`/`lapCount` mirror Q36.1's stored fields so the event carries the driver's own
+stored result, not a re-derived one.
+*Rejected:* one `{sessionId, summary[]}` event per session — would force every consumer to fan the
+array out itself and contradicts the catalog's singular `masterId`.
+
+**Q36.3 — A `session.ended` summary row names a `masterId` Driver has never seen locally. What happens?**
+A: **Reuse Story 3.2's minimal-profile safety net (create-if-absent), then store the summary and
+emit `driver.history_appended`.** A summary is never dropped and the driver becomes locally known —
+mirroring FR12's "the lap is never dropped" ethos exactly (the same `insert_minimal_profile`
+create-if-absent path, respecting the same eventual tombstone once Story 3.7 wires it). This keeps
+Driver's local model internally consistent (no `driver_session_summaries` / `driver_laps` row can
+reference a `masterId` with no `driver_profiles` row). Whether the safety-net profile creation
+**also** emits `driver.profile_updated` here follows the existing Story 3.2 rule unchanged (it fires
+only on a genuine first creation), so no new duplicate-publish path is introduced.
+*Rejected:* store-summary-only — would allow a summary/lap row to dangle against an unknown driver,
+breaking the local-consistency invariant the safety net exists to hold.

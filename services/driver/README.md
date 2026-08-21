@@ -16,8 +16,25 @@ publishes `driver.profile_updated` (FR12). The creation is permanent: every late
 trigger for the same `masterId` is a structural no-op — `driver.persistence.profiles
 .insert_minimal_profile` can only ever `INSERT ... WHERE NOT EXISTS`, so a second
 write can never overwrite the first (FR13, "Driver's write wins"), and every skip is
-logged. Lap history (3.3), PR detection (3.4), and the erasure handler (3.7) build on
-this in later stories.
+logged. PR detection (3.4) and the erasure handler (3.7) build on this in later stories.
+
+**Story 3.3 adds lap-by-lap history and per-session summaries.** The same consumer now
+also handles `session.ended` (bound on the existing `timing.events` binding) and does
+more with each event:
+
+- On `lap.recorded`, in the same transaction as the safety net, it appends the lap to
+  `driver_laps` (`INSERT ... ON CONFLICT DO NOTHING`; a `(master_id, session_id,
+  lap_number)` PK plus a `UNIQUE source_event_id` index make a redelivered lap a no-op —
+  the inbox is the primary idempotency guard, these are belt-and-braces). FR9/NFR3.
+- On `session.ended`, for **each** row of `summary[]` it runs the safety net for that
+  row's `masterId` (so an unknown driver is created, never dropped — Q&A Round 36/Q36.3),
+  stores the per-`(master_id, session_id)` result in `driver_session_summaries`, and
+  publishes **one** `driver.history_appended {masterId, sessionId, bestLapMs, lapCount}`
+  per row (Q36.2). A single inbox mark covers the whole envelope, so a redelivered
+  `session.ended` publishes no duplicate history and stores no duplicate rows. FR10.
+
+The `session.ended.summary[]` item shape was pinned at this consume point (Q36.1):
+`masterId` required, `bestLapMs`/`lapCount` optional, item still tolerant.
 
 ## Stack
 
@@ -34,7 +51,7 @@ pip install -e ../../contract/codegen/python
 pip install -e ../../libs/py-pitwall
 pip install -e .[test]
 
-# Run this service's own migrations (creates the outbox/inbox tables):
+# Run this service's own migrations (outbox/inbox + driver_profiles + driver_laps/driver_session_summaries):
 DB_PATH=./driver.db python -m alembic upgrade head
 
 # Run the tests:

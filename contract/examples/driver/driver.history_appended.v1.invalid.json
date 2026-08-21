@@ -1,0 +1,17 @@
+{
+  "id": "018f4c1a-2b3c-7d4e-8f90-1a2b3c4d5e6f",
+  "type": "driver.history_appended",
+  "source": "driver",
+  "schemaVersion": 1,
+  "envelopeVersion": 1,
+  "occurredAt": "2026-06-01T14:05:00.500Z",
+  "correlationId": "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
+  "causationId": "018f7b3a-1c52-7f8b-9a4d-2b3c4d5e6f70",
+  "_invalidReason": "masterId is a v1 UUID (version nibble '1', not '4') — the wire rule requires a canonical v4 masterId; a v1 (or any non-v4) UUID must be rejected.",
+  "data": {
+    "masterId": "1a9f7c20-3e84-1d11-9aa2-7b6c5e4d3f21",
+    "sessionId": "session-2026-05-31-evening-heat-3",
+    "bestLapMs": 41980,
+    "lapCount": 12
+  }
+}
