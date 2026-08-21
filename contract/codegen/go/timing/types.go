@@ -64,6 +64,33 @@ type LapRecordedV1SchemaJson struct {
 // Hardware id if detected via transponder rather than QR. Optional.
 type LapRecordedV1SchemaJsonTransponderID *string
 
+// Timing detected — from the live lap stream — that a driver's counted lap beat
+// their all-time personal record held in Timing's local copy (or set their
+// first-ever PR). Published to the 'timing.events' exchange with routing key
+// 'personal_record.broken'. Driver is the system of record: it confirms the
+// canonical PR from its own lap history and re-publishes driver.pr_updated (Story
+// 3.4, FR37/FR11); Mailing (Epic 10) may alert on it. previousMs is OMITTED on a
+// first-ever PR (there is nothing to beat) and PRESENT (the value just beaten) on
+// a subsequent break — Story 3.4 / Q&A Round 37 / Q37.2.
+type PersonalRecordBrokenV1SchemaJson struct {
+	// The record-setting lap time, in milliseconds (the new best).
+	LapTimeMs int `json:"lapTimeMs"`
+
+	// Canonical masterId issued by Identity. Lowercase canonical UUID v4 (version
+	// nibble 4, variant nibble [89ab]); the pattern is enforced (format is
+	// annotation-only).
+	MasterID string `json:"masterId"`
+
+	// The all-time PR that was just beaten, in milliseconds. OPTIONAL: absent on a
+	// first-ever PR (nothing to beat). When present, it is strictly greater than
+	// lapTimeMs.
+	PreviousMs *int `json:"previousMs"`
+
+	// Session the record-setting lap belongs to. Same id space as
+	// lap.recorded.sessionId / session.ended.sessionId.
+	SessionID string `json:"sessionId"`
+}
+
 // The ACTUAL (physical) end of a session plus its summary, emitted by Timing.
 // Published to the 'timing.events' exchange with routing key 'session.ended'.
 // Consumers: Booking, Billing (close tab), Driver (store summary), Mailing
