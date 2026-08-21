@@ -2,6 +2,44 @@
 
 package driver
 
+// Driver stored one driver's per-session result. Published to the 'driver.events'
+// exchange with routing key 'driver.history_appended'. Emitted ONE-PER-DRIVER when
+// Driver consumes a timing/session.ended (Story 3.3, Q&A Round 36 / Q36.2): each
+// row of session.ended.summary[] becomes its own driver.history_appended so a
+// consumer (Frontend) can key its per-driver read-model update off masterId
+// without unpacking an array. bestLapMs/lapCount mirror the stored summary row
+// (contract/schemas/timing/session.ended.v1.schema.json's summary items); this is
+// a session-scoped result, NOT the canonical all-time PR (that is
+// driver.pr_updated, Story 3.4).
+type DriverHistoryAppendedV1SchemaJson struct {
+	// The driver's best (fastest) valid lap this session, in milliseconds. Null if
+	// the driver logged no counted lap (mirrors the stored summary row); always
+	// present as a key (no omitempty, AR9).
+	BestLapMs DriverHistoryAppendedV1SchemaJsonBestLapMs `json:"bestLapMs"`
+
+	// Number of counted laps the driver logged this session (out-lap excluded). Null
+	// if unknown; always present as a key.
+	LapCount DriverHistoryAppendedV1SchemaJsonLapCount `json:"lapCount"`
+
+	// Canonical masterId issued by Identity. Lowercase canonical UUID v4 (version
+	// nibble 4, variant nibble [89ab]); the pattern is enforced (format is
+	// annotation-only).
+	MasterID string `json:"masterId"`
+
+	// The session this result belongs to. Same id space as lap.recorded.sessionId /
+	// session.ended.sessionId.
+	SessionID string `json:"sessionId"`
+}
+
+// The driver's best (fastest) valid lap this session, in milliseconds. Null if the
+// driver logged no counted lap (mirrors the stored summary row); always present as
+// a key (no omitempty, AR9).
+type DriverHistoryAppendedV1SchemaJsonBestLapMs *int
+
+// Number of counted laps the driver logged this session (out-lap excluded). Null
+// if unknown; always present as a key.
+type DriverHistoryAppendedV1SchemaJsonLapCount *int
+
 // Driver's racing profile (identity/preference fields) for a masterId changed, or
 // was created for the first time via the minimal-profile safety net. Published to
 // the 'driver.events' exchange with routing key 'driver.profile_updated'. Field

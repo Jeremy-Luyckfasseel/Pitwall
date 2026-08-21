@@ -61,6 +61,7 @@ GOWORK=off go run $GO_JSONSCHEMA $FLAGS -p control \
 
 echo "generating contract/codegen/go/driver ..."
 GOWORK=off go run $GO_JSONSCHEMA $FLAGS -p driver \
+  "$SCHEMAS/driver/driver.history_appended.v1.schema.json" \
   "$SCHEMAS/driver/driver.profile_updated.v1.schema.json" \
   -o "$OUT/driver/types.go"
 

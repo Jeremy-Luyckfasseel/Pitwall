@@ -67,11 +67,13 @@ type LapRecordedV1SchemaJsonTransponderID *string
 // The ACTUAL (physical) end of a session plus its summary, emitted by Timing.
 // Published to the 'timing.events' exchange with routing key 'session.ended'.
 // Consumers: Booking, Billing (close tab), Driver (store summary), Mailing
-// (session summary), Leaderboard (mark finished). NOTE: the per-item shape of
-// `summary[]` is NOT pinned by the source corpus and is intentionally left
-// tolerant (additionalProperties:true, no required item fields) — no Epic-1
-// consumer reads summary contents. Pin the item fields when Driver/Mailing
-// actually consume them (Epic 3/10). Confirm-at-build, do not invent.
+// (session summary), Leaderboard (mark finished). The per-item shape of
+// `summary[]` was pinned by Driver's consume point (Story 3.3, Q&A Round 36 /
+// Q36.1): each row requires `masterId` (canonical UUID v4) and carries optional
+// `bestLapMs` + `lapCount` — the exact shape Timing already emits. The item object
+// stays tolerant (no additionalProperties:false) so a later consumer (e.g.
+// Mailing, Epic 10) may pin further fields additively without breaking existing
+// producers/consumers.
 type SessionEndedV1SchemaJson struct {
 	// When the session actually ended. RFC3339 UTC, exactly 3-digit milliseconds,
 	// literal 'Z' (AR9). The pattern is enforced (format is annotation-only).
@@ -80,12 +82,26 @@ type SessionEndedV1SchemaJson struct {
 	// The session that ended. Same id space as lap.recorded.sessionId.
 	SessionID string `json:"sessionId"`
 
-	// Per-session result rows (e.g. one per driver, with lap times). Item shape
-	// intentionally unpinned for v1 — tolerant object.
+	// Per-session result rows, one per driver. Item shape pinned in v1 (Story 3.3,
+	// Q36.1): masterId required, bestLapMs/lapCount optional; the item stays a
+	// tolerant object (additive fields allowed).
 	Summary []SessionEndedV1SchemaJsonSummaryElem `json:"summary"`
 }
 
-type SessionEndedV1SchemaJsonSummaryElem map[string]interface{}
+type SessionEndedV1SchemaJsonSummaryElem struct {
+	// The driver's best (fastest) valid lap this session, in milliseconds. Optional —
+	// absent if the driver logged no counted lap.
+	BestLapMs *int `json:"bestLapMs"`
+
+	// Number of counted laps the driver logged this session (out-lap excluded).
+	// Optional.
+	LapCount *int `json:"lapCount"`
+
+	// Canonical masterId issued by Identity. Lowercase canonical UUID v4 (version
+	// nibble 4, variant nibble [89ab]); the pattern is enforced (format is
+	// annotation-only).
+	MasterID string `json:"masterId"`
+}
 
 // The ACTUAL (physical) start of a session, emitted by Timing. Published to the
 // 'timing.events' exchange with routing key 'session.started'. Consumers: Booking
