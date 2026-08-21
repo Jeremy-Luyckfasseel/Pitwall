@@ -41,10 +41,11 @@ const TimingExchange = "timing.events"
 // <entity>.<action> form). Their /contract data schemas live under
 // contract/schemas/timing/ (Story 1.2).
 const (
-	LapRecordedRoutingKey     = "lap.recorded"
-	SessionStartedRoutingKey  = "session.started"
-	SessionEndedRoutingKey    = "session.ended"
-	DriverCheckedInRoutingKey = "driver.checked_in"
+	LapRecordedRoutingKey          = "lap.recorded"
+	SessionStartedRoutingKey       = "session.started"
+	SessionEndedRoutingKey         = "session.ended"
+	DriverCheckedInRoutingKey      = "driver.checked_in"
+	PersonalRecordBrokenRoutingKey = "personal_record.broken"
 )
 
 // Check-in methods for driver.checked_in.checkInMethod (pinned by the /contract enum).
@@ -150,6 +151,35 @@ func NewSessionStartedEnvelope(source, correlationID, sessionID string, startedA
 	return libmsg.NewDomainEnvelope(SessionStartedRoutingKey, source, correlationID, ts, SessionStartedData{
 		SessionID: sessionID,
 		StartedAt: ts,
+	})
+}
+
+// PersonalRecordBrokenData is the timing/personal_record.broken.v1 payload (Story 3.4,
+// FR37). PreviousMs is a pointer with `,omitempty`: on a FIRST-ever PR there is nothing
+// to beat, so the key is OMITTED entirely (Q37.2). This deliberately differs from the
+// generated DTO, whose --disable-omitempty pointer would serialize `previousMs: null` —
+// and null is INVALID against the schema (previousMs is `type: integer`, not nullable),
+// so the hand-written struct is the schema-correct wire representation. LapTimeMs is
+// int64 to match the domain's lap-time arithmetic (mapped to the generated int at the
+// codegen equivalence boundary, envelope_codegen_test.go).
+type PersonalRecordBrokenData struct {
+	MasterID   string `json:"masterId"`
+	SessionID  string `json:"sessionId"`
+	LapTimeMs  int64  `json:"lapTimeMs"`
+	PreviousMs *int64 `json:"previousMs,omitempty"`
+}
+
+// NewPersonalRecordBrokenEnvelope builds a personal_record.broken envelope. It is
+// flow-originating (like every simulator-produced event: lap.recorded, session.ended,
+// …) — causationId null, correlationId = the session's id — because it is produced in
+// the same live lap flow as its sibling lap.recorded, with no prior consumed envelope to
+// cause it. previousMs nil (a first PR) omits the field.
+func NewPersonalRecordBrokenEnvelope(source, correlationID, masterID, sessionID string, lapTimeMs int64, previousMs *int64, at time.Time) Envelope {
+	return libmsg.NewDomainEnvelope(PersonalRecordBrokenRoutingKey, source, correlationID, FormatWireTime(at), PersonalRecordBrokenData{
+		MasterID:   masterID,
+		SessionID:  sessionID,
+		LapTimeMs:  lapTimeMs,
+		PreviousMs: previousMs,
 	})
 }
 
