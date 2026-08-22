@@ -65,6 +65,14 @@ type Config struct {
 	// whole session — a silent misconfiguration).
 	SimScannerOutageLaps int
 
+	// SimOutOfSessionLaps is how many counted laps the simulator injects, per inter-session
+	// gap, as a reconciled out-of-session session — the physical-reality-wins path (Story 3.6,
+	// FR83/NFR24): crossings from a known driver that arrive while Timing thinks no session is
+	// active are accepted and reconciled by auto-starting a session. Optional, default 0 (no
+	// out-of-session crossings — no behavior change); must be >= 0. It is an INDEPENDENT
+	// injected-crossing count (like UnknownTokenScans), so it is NOT tied to SimSessionLaps.
+	SimOutOfSessionLaps int
+
 	// Consumer + DLQ knobs — Timing's FIRST inbound consumer (identity.resolved) arrives
 	// in Story 2.3. ConsumePrefetch bounds in-flight unacked deliveries (QoS, > 0). The
 	// DLQ policy (Story 1.9; values pinned Q&A Round 27) governs retry-then-park.
@@ -248,6 +256,18 @@ func loadSimulator(getenv func(string) string, cfg *Config) error {
 			outageLaps, cfg.SimSessionLaps)
 	}
 	cfg.SimScannerOutageLaps = outageLaps
+
+	// SIM_OUT_OF_SESSION_LAPS (Story 3.6): optional, default 0 (no out-of-session crossings —
+	// no behavior change). Must be >= 0. Independent of SimSessionLaps (the reconciled session
+	// is separate from the normal one) — no upper-bound guard, mirroring SIM_UNKNOWN_TOKEN_SCANS.
+	outOfSessionLaps, err := intEnv(getenv, "SIM_OUT_OF_SESSION_LAPS", 0)
+	if err != nil {
+		return err
+	}
+	if outOfSessionLaps < 0 {
+		return fmt.Errorf("SIM_OUT_OF_SESSION_LAPS must be >= 0, got %d", outOfSessionLaps)
+	}
+	cfg.SimOutOfSessionLaps = outOfSessionLaps
 
 	// Optional, correctness-neutral pacing knobs (defaults allowed).
 	tick, err := intEnv(getenv, "SIM_TICK_MS", 250)

@@ -91,6 +91,57 @@ func TestLoad_SimulatorRejectsScannerOutageLapsAtOrAboveSessionLaps(t *testing.T
 	}
 }
 
+// Story 3.6: SIM_OUT_OF_SESSION_LAPS is optional, defaults to 0 (no out-of-session
+// crossings — no behavior change), and is an INDEPENDENT injected-crossing count (like
+// SIM_UNKNOWN_TOKEN_SCANS), so it is NOT tied to SIM_SESSION_LAPS (no upper-bound guard).
+func TestLoad_SimulatorOutOfSessionLapsDefaultsOff(t *testing.T) {
+	cfg, err := Load(envFrom(simEnv()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SimOutOfSessionLaps != 0 {
+		t.Errorf("SimOutOfSessionLaps default = %d, want 0", cfg.SimOutOfSessionLaps)
+	}
+}
+
+func TestLoad_SimulatorOutOfSessionLapsParsed(t *testing.T) {
+	env := simEnv()
+	env["SIM_OUT_OF_SESSION_LAPS"] = "2"
+	cfg, err := Load(envFrom(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SimOutOfSessionLaps != 2 {
+		t.Errorf("SimOutOfSessionLaps = %d, want 2", cfg.SimOutOfSessionLaps)
+	}
+}
+
+// Independent of SIM_SESSION_LAPS: a value at/above SIM_SESSION_LAPS is fine (unlike the
+// scanner-outage knob), because the reconciled session is separate from the normal one.
+func TestLoad_SimulatorOutOfSessionLapsNotTiedToSessionLaps(t *testing.T) {
+	env := simEnv() // SIM_SESSION_LAPS = 10
+	env["SIM_OUT_OF_SESSION_LAPS"] = "10"
+	cfg, err := Load(envFrom(env))
+	if err != nil {
+		t.Fatalf("unexpected error (knob is independent of SIM_SESSION_LAPS): %v", err)
+	}
+	if cfg.SimOutOfSessionLaps != 10 {
+		t.Errorf("SimOutOfSessionLaps = %d, want 10", cfg.SimOutOfSessionLaps)
+	}
+}
+
+func TestLoad_SimulatorRejectsNegativeOutOfSessionLaps(t *testing.T) {
+	env := simEnv()
+	env["SIM_OUT_OF_SESSION_LAPS"] = "-1"
+	_, err := Load(envFrom(env))
+	if err == nil {
+		t.Fatal("expected an error for negative SIM_OUT_OF_SESSION_LAPS")
+	}
+	if !strings.Contains(err.Error(), "SIM_OUT_OF_SESSION_LAPS") {
+		t.Errorf("error should name SIM_OUT_OF_SESSION_LAPS; got: %v", err)
+	}
+}
+
 // Simulator ON with all required knobs: parses, applies pacing defaults.
 func TestLoad_SimulatorOnParsesKnobsAndDefaults(t *testing.T) {
 	cfg, err := Load(envFrom(simEnv()))

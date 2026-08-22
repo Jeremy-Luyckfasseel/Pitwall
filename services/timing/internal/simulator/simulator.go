@@ -96,7 +96,16 @@ type Config struct {
 	// (persistence.ScannerOutageStore.CloseOutage seam). Called by Run when it emits a
 	// scanner.online. Required only when ScannerOutageLaps > 0; a CloseOutage error is FATAL to Run.
 	CloseOutage func(ctx context.Context, id int64, onlineAt string) error
-	Log         *slog.Logger
+	// OutOfSessionLaps injects, per inter-session gap, a reconciled "out-of-session" session of
+	// this many counted laps from a KNOWN driver — the physical-reality-wins path (Story 3.6,
+	// FR83/NFR24). >= 0; 0 (default) injects none — no behavior change from pre-3.6. When > 0,
+	// Run generates crossings that arrive while it thinks no session is active (the in-memory
+	// session-active flag is clear) and reconciles by auto-starting a session: emit session.started
+	// → lap.recorded(s) → session.ended (all through the existing Enqueue), plus a WARN log. The
+	// crossing is accepted, never dropped; there is no new contract event and no durable record
+	// (Q39.3/Q39.4).
+	OutOfSessionLaps int
+	Log              *slog.Logger
 }
 
 // HeldScan is a line-crossing whose token had no completed check-in this session — the
@@ -229,62 +238,142 @@ func (s *Simulator) Run(ctx context.Context) error {
 				"alert", "unknown_token_at_line", "token", h.Token, "method", h.Method,
 				"sessionId", h.SessionID, "reason", h.Reason)
 		}
-		var sessionID string
-		var openOutageID int64
+		var st runState
 		for _, env := range session {
-			if err := s.cfg.Enqueue(ctx, env); err != nil {
+			if err := s.emitEnvelope(ctx, env, &st); err != nil {
 				if ctx.Err() != nil {
 					return nil
 				}
-				return fmt.Errorf("simulator enqueue %s: %w", env.Type, err)
-			}
-			// Live PR detection (Story 3.4, FR37): after a counted lap is enqueued, consult
-			// Timing's local PR copy; on a break enqueue a personal_record.broken right
-			// after the lap (same correlationId, flow-originating). Detection is stateful
-			// (all-time, cross-session) so it lives here in Run's I/O path, not in the pure
-			// GenerateSession. Only wired when the PR subsystem is enabled (ObservePR != nil).
-			if s.cfg.ObservePR != nil && env.Type == messaging.LapRecordedRoutingKey {
-				if perr := s.observePR(ctx, env); perr != nil {
-					if ctx.Err() != nil {
-						return nil
-					}
-					return perr
-				}
-			}
-			// Scanner outage durable record (Story 3.5, FR38): the scanner.offline/online
-			// envelopes are already on the bus (enqueued above); here Run persists the gap
-			// (OpenOutage on offline, CloseOutage on recovery) and alerts Control Room via a
-			// structured log — the placeholder for the E12 consumer that does not exist yet.
-			switch env.Type {
-			case messaging.SessionStartedRoutingKey:
-				if d, ok := env.Data.(messaging.SessionStartedData); ok {
-					sessionID = d.SessionID
-				}
-			case messaging.ScannerOfflineRoutingKey:
-				id, oerr := s.openOutage(ctx, env, sessionID)
-				if oerr != nil {
-					if ctx.Err() != nil {
-						return nil
-					}
-					return oerr
-				}
-				openOutageID = id
-			case messaging.ScannerOnlineRoutingKey:
-				if oerr := s.closeOutage(ctx, env, openOutageID, sessionID); oerr != nil {
-					if ctx.Err() != nil {
-						return nil
-					}
-					return oerr
-				}
+				return err
 			}
 			if !sleep(ctx, s.cfg.Tick) {
 				return nil
 			}
 		}
+		// Out-of-session lap reconciliation (Story 3.6, FR83/NFR24): during the inter-session
+		// gap — while Timing thinks no session is active (st.active is now false) — a crossing
+		// from a known driver arrives. Physical reality wins: Timing auto-starts the session the
+		// scans prove is happening (see emitReconciledSession). No-op when the knob is off.
+		if err := s.emitReconciledSession(ctx, &st); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
 		if !sleep(ctx, s.cfg.SessionGap) {
 			return nil
 		}
 	}
+}
+
+// runState carries the simulator's per-session I/O state across a single Run iteration:
+// the current sessionId, the open scanner-outage row id, and the in-memory session-active
+// flag (Story 3.6, Q39.1) — Timing's model of "does it think a session is active". The flag
+// is set when Run enqueues a session.started and cleared on session.ended; the out-of-session
+// reconcile fires only when it is clear.
+type runState struct {
+	sessionID    string
+	openOutageID int64
+	active       bool
+	// lastEndedAt is the wire time of the most recent session.ended this Run iteration. The
+	// out-of-session reconcile bases its session here (the inter-session gap begins when the
+	// normal session ends), so the reconciled session's timestamps follow — rather than precede
+	// or overlap — the session it comes after (Story 3.6 review). Zero until the first end.
+	lastEndedAt time.Time
+}
+
+// emitEnvelope enqueues one simulated event through the outbox and runs the side effects tied
+// to its type: live PR detection after a counted lap (Story 3.4), the scanner-outage durable
+// open/close on scanner.offline/online (Story 3.5), and the session-active flag transitions
+// (Story 3.6). It returns any error to Run (which decides graceful-cancel vs fatal); every
+// seam error is fatal so a real lap/gap/PR is never silently dropped.
+func (s *Simulator) emitEnvelope(ctx context.Context, env messaging.Envelope, st *runState) error {
+	if err := s.cfg.Enqueue(ctx, env); err != nil {
+		return fmt.Errorf("simulator enqueue %s: %w", env.Type, err)
+	}
+	// Live PR detection (Story 3.4, FR37): after a counted lap is enqueued, consult Timing's
+	// local PR copy; on a break enqueue a personal_record.broken right after the lap (same
+	// correlationId, flow-originating). Detection is stateful (all-time, cross-session) so it
+	// lives here in Run's I/O path, not in the pure GenerateSession. Only wired when enabled.
+	if s.cfg.ObservePR != nil && env.Type == messaging.LapRecordedRoutingKey {
+		if perr := s.observePR(ctx, env); perr != nil {
+			return perr
+		}
+	}
+	// Scanner outage durable record (Story 3.5, FR38): the scanner.offline/online envelopes are
+	// already on the bus (enqueued above); here Run persists the gap (OpenOutage on offline,
+	// CloseOutage on recovery). Session-active flag transitions (Story 3.6) also live here.
+	switch env.Type {
+	case messaging.SessionStartedRoutingKey:
+		if d, ok := env.Data.(messaging.SessionStartedData); ok {
+			st.sessionID = d.SessionID
+		}
+		st.active = true
+	case messaging.SessionEndedRoutingKey:
+		st.active = false
+		if d, ok := env.Data.(messaging.SessionEndedData); ok {
+			if t, err := messaging.ParseWireTime(d.EndedAt); err == nil {
+				st.lastEndedAt = t
+			}
+		}
+	case messaging.ScannerOfflineRoutingKey:
+		id, oerr := s.openOutage(ctx, env, st.sessionID)
+		if oerr != nil {
+			return oerr
+		}
+		st.openOutageID = id
+	case messaging.ScannerOnlineRoutingKey:
+		if oerr := s.closeOutage(ctx, env, st.openOutageID, st.sessionID); oerr != nil {
+			return oerr
+		}
+	}
+	return nil
+}
+
+// emitReconciledSession runs the out-of-session reconciliation (Story 3.6, FR83/NFR24). When
+// OutOfSessionLaps > 0, it generates a reconciled session (GenerateReconciledSession) and, only
+// because Timing thinks no session is active (st.active is clear), auto-starts it: it logs the
+// reconcile at WARN severity (FR83 says "log a warning", NOT an alert) and enqueues
+// session.started → lap.recorded(s) → session.ended through the same emitEnvelope path. The
+// crossing is accepted, never dropped. A nil/empty generator result (knob off) is a graceful
+// no-op; an enqueue error is fatal to Run (a real lap is never silently dropped).
+func (s *Simulator) emitReconciledSession(ctx context.Context, st *runState) error {
+	// The reconcile fires ONLY when Timing thinks no session is active (Q39.1): the crossing is
+	// "out of session" precisely because st.active is clear. If a session is somehow still active
+	// there is nothing out-of-session to reconcile — so the flag gates the corrective emission,
+	// not merely its log.
+	if s.cfg.OutOfSessionLaps <= 0 || st.active {
+		return nil
+	}
+	// Base the reconciled session at the normal session's end (the inter-session gap begins
+	// there) so its timestamps follow — not precede — the session it comes after. Fall back to
+	// the wall clock before any session has ended this iteration.
+	base := st.lastEndedAt
+	if base.IsZero() {
+		base = s.now()
+	}
+	recon := s.GenerateReconciledSession(base)
+	if len(recon) == 0 {
+		return nil
+	}
+	for i, env := range recon {
+		if i == 0 && env.Type == messaging.SessionStartedRoutingKey {
+			master := ""
+			if len(s.drivers) > 0 {
+				master = s.drivers[0].masterID
+			}
+			d, _ := env.Data.(messaging.SessionStartedData)
+			s.logWarn("out-of-session crossing — reconciling session state (physical reality wins)",
+				"reconcile", "out_of_session_lap", "sessionId", d.SessionID, "masterId", master)
+		}
+		if err := s.emitEnvelope(ctx, env, st); err != nil {
+			return err
+		}
+		if !sleep(ctx, s.cfg.Tick) {
+			return nil
+		}
+	}
+	return nil
 }
 
 // observePR runs live PR detection for one counted lap.recorded envelope (Story 3.4): it
@@ -538,6 +627,61 @@ func (s *Simulator) GenerateSession(base time.Time) ([]messaging.Envelope, []Hel
 	}
 	out = append(out, messaging.NewSessionEndedEnvelope(s.cfg.Source, correlationID, sessionID, lastAt, summary))
 	return out, held
+}
+
+// GenerateReconciledSession produces one complete "out-of-session" reconciled session
+// (Story 3.6, FR83/NFR24): when OutOfSessionLaps > 0 it returns, in time order,
+// session.started (a DISTINCT "sim-oos-" sessionId so it never collides with a normal
+// "sim-" session) → one lap.recorded per counted lap (OutOfSessionLaps+1 crossings for
+// ONE known driver: the first is the out-lap / start marker, the next N are counted) →
+// session.ended with the driver's summary. It models crossings from a KNOWN (already
+// resolved in Prepare) driver arriving while Timing thinks no session is active: physical
+// reality wins, so Timing auto-starts the session the scans prove is happening. The lap
+// structure and timings are deterministic given base + the RNG state (only drawLapMs
+// consumes s.cfg.Rng); the correlationId is a fresh per-session uuid, exactly as in
+// GenerateSession. Run does the I/O (enqueue + the WARN log). Returns nil when the knob is
+// off (OutOfSessionLaps <= 0), there are no drivers, OR no crossing was actually counted
+// (e.g. the min-lap filter rejected them all) — with no real lap there is nothing to
+// reconcile, so nothing is emitted.
+func (s *Simulator) GenerateReconciledSession(base time.Time) []messaging.Envelope {
+	if s.cfg.OutOfSessionLaps <= 0 || len(s.drivers) == 0 {
+		return nil
+	}
+	d := s.drivers[0] // a known, already-resolved driver — this is not an unknown/held token
+	sessionID := "sim-oos-" + base.UTC().Format("20060102T150405.000Z")
+	correlationID := uuid.Must(uuid.NewV7()).String()
+
+	tracker := &domain.LapTracker{MinLapTimeMs: int64(s.cfg.MinLapTimeMs)}
+	laps := make([]messaging.Envelope, 0, s.cfg.OutOfSessionLaps)
+	var best int64
+	count := 0
+	lastAt := base
+	at := base
+	// OutOfSessionLaps+1 crossings: the first is the out-lap (start marker, no lap), each
+	// subsequent counted crossing yields one lap.recorded — so the crossing is never dropped.
+	for i := 0; i <= s.cfg.OutOfSessionLaps; i++ {
+		lap, outcome := tracker.Cross(at)
+		if outcome == domain.Counted {
+			laps = append(laps, messaging.NewLapRecordedEnvelope(
+				s.cfg.Source, correlationID, d.masterID, sessionID, lap.LapNumber, lap.LapTimeMs, nil, at))
+			if count == 0 || lap.LapTimeMs < best {
+				best = lap.LapTimeMs
+			}
+			count++
+			lastAt = at
+		}
+		at = at.Add(time.Duration(s.drawLapMs()) * time.Millisecond)
+	}
+	if count == 0 {
+		return nil // no real out-of-session lap was recorded — nothing to reconcile
+	}
+
+	out := make([]messaging.Envelope, 0, count+2)
+	out = append(out, messaging.NewSessionStartedEnvelope(s.cfg.Source, correlationID, sessionID, base))
+	out = append(out, laps...)
+	out = append(out, messaging.NewSessionEndedEnvelope(s.cfg.Source, correlationID, sessionID, lastAt,
+		[]messaging.SessionSummaryRow{{MasterID: d.masterID, BestLapMs: best, LapCount: count}}))
+	return out
 }
 
 // drawLapMs draws one lap time from the configured normal distribution, clamped to

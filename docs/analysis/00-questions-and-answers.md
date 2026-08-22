@@ -1678,3 +1678,85 @@ Epic-1/Epic-3 read-models into a Timing story.
 >   split Story 3.4 used for the `driver_prs` store vs the sim-gated PR detection.
 > - **No tombstone / erasure wiring** here — Story 3.7 owns Driver/Timing erasure + retention; the
 >   `scanner_outages` retention (operational, active + 2 y, DG-1) is a 3.7/E14 concern, not 3.5.
+
+## Round 39 — Story 3.6 Out-of-session lap reconciliation: exercise/state model, reconcile behavior, contract impact, and durability (2026-08-22)
+
+> Surfaced while drafting **Story 3.6** (Out-of-session lap reconciliation — physical reality wins). The
+> high-level behavior is fixed by FR83 / NFR24 and `timing.md#sad-path-table`: **a `lap.recorded` for a
+> session Timing does not think is active is accepted and logged; Timing reconciles session state from the
+> actual scan stream (physical reality wins) — the lap is never dropped.** But the *how* is unpinned for a
+> **simulator-only** world, and it collides with two facts about the current codebase: (1) **Timing
+> produces `lap.recorded`, it never consumes them** — its only inbound consumer is `identity.resolved`; and
+> (2) **Timing holds no persistent/active "current session" state** — `GenerateSession` builds a whole
+> session atomically in memory (`session.started` → laps → `session.ended`), so within a generate call
+> every crossing always has an active session. The only "no session active" window that exists today is the
+> inter-session `SessionGap` in `Run`'s loop. Note also that the **consumer-side of NFR24 was already built
+> on Leaderboard in Story 1.8** (out-of-order lap → implicit board; replayed `session.started` never wipes a
+> live one); **Story 3.6 is the Timing producer-side counterpart.** Four decisions are **not** answered
+> anywhere and materially shape the story; all asked per the golden rule (CLAUDE.md §0).
+
+**Q39.1 — How is the "out-of-session lap" scenario exercised, and where does Timing's "is a session active" state live (it has none today)?**
+A: **A new sim-gated knob + an in-memory session-active flag in `Run`.** Add an optional config knob
+(default off — no behavior change, exactly like Story 2.5's `SIM_UNKNOWN_TOKEN_SCANS` and Story 3.5's
+`SIM_SCANNER_OUTAGE_LAPS`) that injects a small number of start-finish crossings **during the inter-session
+`SessionGap`** — the genuine "no session active" window between one `GenerateSession`'s `session.ended` and
+the next session's `session.started`. `Run` tracks a lightweight **in-memory session-active flag** (set when
+it emits/enqueues a `session.started`, cleared when it emits a `session.ended`); a crossing that arrives
+while the flag is clear is the out-of-session case and triggers the reconciliation path (Q39.2). *Rejected:*
+a **durable `sessions` status table** (heavier; a real session store is not needed to model this sad path and
+`session.started`/`session.ended` are already durable on the bus) and a **pure-`GenerateSession`-only** model
+(the "no active session" condition is fundamentally a `Run`-loop / cross-session concern — the same reason
+live PR detection lives in `Run`, not the pure generator, Q37/Round 37).
+
+**Q39.2 — What does "reconcile session state — physical reality wins" produce (the observable events)?**
+A: **Auto-start a session from the physical crossing.** When a crossing arrives with no session active,
+Timing brings its (wrong) session state into line with reality: it emits a fresh **`session.started`** (a
+new `sessionId`, reconciled from the scan) — flipping the in-memory flag to active — and then processes the
+crossing normally under that session. Because a driver's first crossing is the **out-lap / start marker**
+(no `lap.recorded`, existing `LapTracker` rule), the accepted crossing establishes the timing baseline for
+the reconciled session; subsequent injected crossings for that driver in the same window are now "in session"
+and produce ordinary counted `lap.recorded`s. The auto-started session is closed with a `session.ended` at
+the end of the injected window (so no dangling active session leaks into the next real `GenerateSession`).
+This is the most literal reading of "reconcile session state from the actual scan stream (physical reality
+wins)." *Rejected:* **re-attach to the most-recently-ended session** (emit the lap under the prior
+`sessionId`, no new `session.started`) — plausible for "a car still finishing after the operator ended the
+session," but it mutates a session Timing already declared ended and gives downstream read-models a lap under
+a `finished` session, which is exactly the corruption NFR24 tells consumers to avoid; and **accept + log only
+with no corrective `session.started`** — leaves the lap orphaned under a `sessionId` no consumer ever saw
+started (Leaderboard's implicit-board safety net would paper over it, but Timing, the SoR for actual session
+boundaries, would be knowingly emitting a lap for a session it never announced).
+
+**Q39.3 — Does Story 3.6 need a new `/contract` event/schema, or purely additive reuse of existing events?**
+A: **No new event — purely additive reuse.** The reconciliation is expressed entirely with **existing**
+events: the corrective **`session.started`** (Q39.2) and the accepted **`lap.recorded`**, plus a structured
+**WARN log** recording that an out-of-session crossing forced a reconcile. **No new schema, no fixtures, no
+codegen** — Story 3.6 touches **no** `/contract` files. This matches the sad-path table wording exactly
+("accept and log a warning") and keeps the story a small, Timing-only change. *Rejected:* a new
+`timing/out_of_session_lap_reconciled` event for a future Control Room / observability consumer — premature
+(no consumer exists, and unlike `scanner.*` the bus catalog defines no such event), and it would inflate a
+one-behavior sad-path into a full contract-evolution story.
+
+**Q39.4 — Is the out-of-session lap recorded durably (like `held_line_scans` / `scanner_outages`), or accept + log only?**
+A: **Accept + WARN log only — no new durable table.** The lap itself is already durable (it flows through the
+Story-1.4 outbox like every other `lap.recorded`), and the corrective `session.started` is likewise durable
+on the bus. The reconciliation event is surfaced as a **structured `WARN` log** — deliberately **one severity
+below** the `alert`/Error used for the unknown-token (2.5) and scanner-offline (3.5) cases, because FR83 /
+the sad-path table say "**log a warning**", not "alert Control Room": an out-of-session crossing is a
+recoverable desync Timing fixes itself (physical reality wins), not an operator-surfaced exception demanding
+intervention. *Rejected:* a durable `out_of_session_laps` record mirroring `held_line_scans` /
+`scanner_outages` — consistent with that precedent, but those record anomalies that are **withheld** from the
+normal flow (a held scan is never emitted as a lap; a gap is never faked into laps) and so need a separate
+durable trail, whereas a reconciled out-of-session lap **is** emitted normally (its durable record is the
+`lap.recorded` + `session.started` themselves), so a second table would be redundant.
+>
+> **Derived, not separately asked (follow from the above + the committed corpus):**
+> - **The corrective `session.started` and the accepted `lap.recorded` are flow-originating**
+>   (`libmsg.NewDomainEnvelope`, `causationId` null, a fresh per-session `correlationId` uuid — exactly as
+>   `GenerateSession` builds every normal session) — identical to every other simulator-produced Timing
+>   event; the out-of-session crossing has no prior *consumed* envelope to cause it.
+> - **The whole out-of-session-injection subsystem is simulator-gated** (the knob + the injection + the
+>   reconcile emission are sim-only), consistent with Q37/Q38's simulator-gating of PR detection and the
+>   scanner outage. No unconditional migration is involved because Q39.4 adds no table.
+> - **Blast radius is Timing-only** — no Leaderboard/Driver change (the consumer-side out-of-order tolerance
+>   is already built, Story 1.8/NFR24) and, per Q39.3, no `/contract` change either.
+> - **No tombstone / erasure / retention wiring** here — Story 3.7 owns Driver/Timing erasure + retention.

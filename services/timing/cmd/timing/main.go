@@ -219,12 +219,17 @@ func run() int {
 				return outageStore.OpenOutage(ctx, scannerID, sessionID, gapFrom, since, recordedAt)
 			},
 			CloseOutage: outageStore.CloseOutage,
-			Log:         log,
+			// Out-of-session lap reconciliation (Story 3.6, FR83/NFR24): inject known-driver
+			// crossings during the inter-session gap and auto-start a reconciled session (physical
+			// reality wins). Sim-gated like every other lap-path knob; no store/consumer added
+			// (accept + WARN log only, Q39.3/Q39.4).
+			OutOfSessionLaps: cfg.SimOutOfSessionLaps,
+			Log:              log,
 		})
 		log.Info("simulator enabled (register-first)", "drivers", cfg.SimDrivers, "transponders", cfg.SimTransponders,
 			"sessionLaps", cfg.SimSessionLaps, "lapMeanMs", cfg.SimLapMeanMs, "lapStddevMs", cfg.SimLapStddevMs,
 			"minLapTimeMs", cfg.MinLapTimeMs, "unknownTokenScans", cfg.UnknownTokenScans,
-			"scannerOutageLaps", cfg.SimScannerOutageLaps)
+			"scannerOutageLaps", cfg.SimScannerOutageLaps, "outOfSessionLaps", cfg.SimOutOfSessionLaps)
 
 		// PR refresh consumer (Story 3.4, AC2): Timing consumes driver.pr_updated off
 		// driver.events to refresh its local PR copy. The Go consumer runtime is
