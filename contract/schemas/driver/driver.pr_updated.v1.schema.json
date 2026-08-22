@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/driver/driver.pr_updated.v1.schema.json",
+  "title": "driver / driver.pr_updated (v1) data payload",
+  "description": "Driver (system of record for the racing identity) confirmed a new canonical all-time personal record for a driver, computed authoritatively from its own lap history (Story 3.4, FR11 / Q&A Round 37 / Q37.4). Published to the 'driver.events' exchange with routing key 'driver.pr_updated' — one event per real change to the canonical PR (idempotent: an already-confirmed PR re-publishes nothing). Timing consumes it to refresh its local PR copy (FR37); Frontend updates its read-model.",
+  "type": "object",
+  "required": ["masterId", "lapTimeMs", "setAt"],
+  "properties": {
+    "masterId": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "Canonical masterId issued by Identity. Lowercase canonical UUID v4 (version nibble 4, variant nibble [89ab]); the pattern is enforced (format is annotation-only)."
+    },
+    "lapTimeMs": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The confirmed canonical all-time best lap time for this driver, in milliseconds."
+    },
+    "setAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      "description": "When the record-setting lap happened (the 'at' of that lap). RFC3339 UTC, exactly 3-digit milliseconds, literal 'Z' (AR9). The pattern is enforced (format is annotation-only)."
+    }
+  }
+}

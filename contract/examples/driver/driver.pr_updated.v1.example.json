@@ -1,0 +1,15 @@
+{
+  "id": "018f4e3c-4d5e-7f60-ab12-3c4d5e6f7081",
+  "type": "driver.pr_updated",
+  "source": "driver",
+  "schemaVersion": 1,
+  "envelopeVersion": 1,
+  "occurredAt": "2026-06-01T14:05:00.750Z",
+  "correlationId": "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
+  "causationId": "018f4d2b-3c4d-7e5f-9a01-2b3c4d5e6f70",
+  "data": {
+    "masterId": "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21",
+    "lapTimeMs": 41980,
+    "setAt": "2026-05-31T14:03:21.500Z"
+  }
+}

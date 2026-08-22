@@ -12,6 +12,23 @@ var (
 	lcUUIDRE   = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 
+func TestParseWireTime_RoundTripsFormat(t *testing.T) {
+	in := time.Date(2026, 5, 31, 13, 45, 0, 500_000_000, time.UTC)
+	got, err := ParseWireTime(FormatWireTime(in))
+	if err != nil {
+		t.Fatalf("ParseWireTime: %v", err)
+	}
+	if !got.Equal(in) {
+		t.Errorf("ParseWireTime round-trip = %v, want %v", got, in)
+	}
+}
+
+func TestParseWireTime_RejectsMalformed(t *testing.T) {
+	if _, err := ParseWireTime("2026-05-31T13:45:00Z"); err == nil {
+		t.Error("ParseWireTime must reject a timestamp with no milliseconds")
+	}
+}
+
 func TestFormatWireTime_ExactContractFormat(t *testing.T) {
 	// A non-UTC input with sub-millisecond precision must normalize to UTC,
 	// exactly 3 fractional digits, and a literal Z.

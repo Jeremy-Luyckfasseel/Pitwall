@@ -80,3 +80,18 @@ const (
 // IdentityResolvedQueue is Timing's durable consumer queue, bound to identity.events on
 // IdentityResolvedRoutingKey.
 const IdentityResolvedQueue = "timing.identity-resolved"
+
+// --- PR refresh topology (Story 3.4) ---
+
+// DriverEventsExchange is Driver's own exchange; Timing binds a SECOND consumer queue
+// here to receive driver.pr_updated and refresh its local all-time-PR copy (FR37). The
+// Go consumer runtime is single-binding-per-queue, so this is a distinct queue from the
+// identity.resolved one (both reuse TimingDLXExchange for their DLX).
+const DriverEventsExchange = "driver.events"
+
+// DriverPRUpdatedRoutingKey is the confirmed-canonical-PR event (== envelope `type`).
+const DriverPRUpdatedRoutingKey = "driver.pr_updated"
+
+// DriverPRUpdatedQueue is Timing's durable consumer queue, bound to driver.events on
+// DriverPRUpdatedRoutingKey.
+const DriverPRUpdatedQueue = "timing.driver-pr-updated"

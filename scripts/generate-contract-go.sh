@@ -62,6 +62,7 @@ GOWORK=off go run $GO_JSONSCHEMA $FLAGS -p control \
 echo "generating contract/codegen/go/driver ..."
 GOWORK=off go run $GO_JSONSCHEMA $FLAGS -p driver \
   "$SCHEMAS/driver/driver.history_appended.v1.schema.json" \
+  "$SCHEMAS/driver/driver.pr_updated.v1.schema.json" \
   "$SCHEMAS/driver/driver.profile_updated.v1.schema.json" \
   -o "$OUT/driver/types.go"
 
@@ -91,6 +92,7 @@ echo "generating contract/codegen/go/timing ..."
 GOWORK=off go run $GO_JSONSCHEMA $FLAGS -p timing \
   "$SCHEMAS/timing/driver.checked_in.v1.schema.json" \
   "$SCHEMAS/timing/lap.recorded.v1.schema.json" \
+  "$SCHEMAS/timing/personal_record.broken.v1.schema.json" \
   "$SCHEMAS/timing/session.ended.v1.schema.json" \
   "$SCHEMAS/timing/session.started.v1.schema.json" \
   -o "$OUT/timing/types.go"

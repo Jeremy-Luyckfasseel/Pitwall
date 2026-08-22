@@ -43,6 +43,7 @@ EVENT_SCHEMA = {
     "lap.recorded": os.path.join(SCHEMAS, "timing", "lap.recorded.v1.schema.json"),
     "session.started": os.path.join(SCHEMAS, "timing", "session.started.v1.schema.json"),
     "session.ended": os.path.join(SCHEMAS, "timing", "session.ended.v1.schema.json"),
+    "personal_record.broken": os.path.join(SCHEMAS, "timing", "personal_record.broken.v1.schema.json"),
 }
 DATA_VALIDATOR = {t: Draft202012Validator(load(p)) for t, p in EVENT_SCHEMA.items()}
 
@@ -83,11 +84,18 @@ LAP_DATA = {
 }
 SS_DATA = {"sessionId": "session-x", "startedAt": "2026-05-31T13:45:00.000Z"}
 SE_DATA = {"sessionId": "session-x", "endedAt": "2026-05-31T14:05:00.000Z", "summary": []}
+PRB_DATA = {
+    "masterId": "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21",
+    "sessionId": "session-2026-05-31-evening-heat-3",
+    "lapTimeMs": 41980,
+    "previousMs": 42318,
+}
 
 VALID = {
     "lap.recorded": lambda: envelope("lap.recorded", copy.deepcopy(LAP_DATA)),
     "session.started": lambda: envelope("session.started", copy.deepcopy(SS_DATA)),
     "session.ended": lambda: envelope("session.ended", copy.deepcopy(SE_DATA)),
+    "personal_record.broken": lambda: envelope("personal_record.broken", copy.deepcopy(PRB_DATA)),
 }
 
 
@@ -157,6 +165,13 @@ def test_session_ended_summary_row_requires_only_masterId_and_stays_tolerant():
     # (tolerant reader — no additionalProperties:false on the item).
     assert errors_for(with_data("session.ended", summary=[{"masterId": LAP_DATA["masterId"]}])) == []
     assert errors_for(with_data("session.ended", summary=[{"masterId": LAP_DATA["masterId"], "futureField": "x"}])) == []
+
+
+def test_personal_record_broken_previousMs_optional_first_pr():
+    # Story 3.4 / Q37.2: the first-ever PR OMITS previousMs (nothing to beat); a
+    # subsequent break carries it. Both must validate — previousMs is optional.
+    assert errors_for(with_data("personal_record.broken", previousMs=_DELETE)) == []
+    assert errors_for(VALID["personal_record.broken"]()) == []
 
 
 def test_tolerant_reader_allows_unknown_additive_field():
@@ -285,6 +300,24 @@ DATA_BAD_CASES = {
     "se-summary-row-lapCount-float": ("session.ended", {"summary": [{"masterId": LAP_DATA["masterId"], "lapCount": 12.5}]}),
     "se-snake-endedAt": ("session.ended", {"endedAt": _DELETE, "ended_at": SE_DATA["endedAt"]}),
     "se-snake-sessionId": ("session.ended", {"sessionId": _DELETE, "session_id": "s"}),
+    # ---- personal_record.broken (Story 3.4 / Q37.2) ----
+    "prb-missing-masterId": ("personal_record.broken", {"masterId": _DELETE}),
+    "prb-missing-sessionId": ("personal_record.broken", {"sessionId": _DELETE}),
+    "prb-missing-lapTimeMs": ("personal_record.broken", {"lapTimeMs": _DELETE}),
+    "prb-masterId-uppercase": ("personal_record.broken", {"masterId": UPPER_UUID}),
+    "prb-masterId-wrong-version": ("personal_record.broken", {"masterId": "1a9f7c20-3e84-1d11-9aa2-7b6c5e4d3f21"}),
+    "prb-masterId-wrong-variant": ("personal_record.broken", {"masterId": "1a9f7c20-3e84-4d11-1aa2-7b6c5e4d3f21"}),
+    "prb-masterId-not-uuid": ("personal_record.broken", {"masterId": "not-a-uuid"}),
+    "prb-sessionId-wrong-type": ("personal_record.broken", {"sessionId": 123}),
+    "prb-lapTimeMs-zero": ("personal_record.broken", {"lapTimeMs": 0}),
+    "prb-lapTimeMs-negative": ("personal_record.broken", {"lapTimeMs": -5}),
+    "prb-lapTimeMs-float": ("personal_record.broken", {"lapTimeMs": 41980.5}),
+    "prb-lapTimeMs-string": ("personal_record.broken", {"lapTimeMs": "41980"}),
+    "prb-previousMs-zero": ("personal_record.broken", {"previousMs": 0}),
+    "prb-previousMs-float": ("personal_record.broken", {"previousMs": 42318.5}),
+    "prb-previousMs-string": ("personal_record.broken", {"previousMs": "42318"}),
+    "prb-snake-lapTimeMs": ("personal_record.broken", {"lapTimeMs": _DELETE, "lap_time_ms": 41980}),
+    "prb-snake-masterId": ("personal_record.broken", {"masterId": _DELETE, "master_id": PRB_DATA["masterId"]}),
 }
 
 
@@ -327,7 +360,7 @@ def test_committed_invalid_fixture_is_rejected(path):
     assert errs != [], f"{_rel(path, EXAMPLES)} is a known-bad fixture but VALIDATED"
 
 
-@pytest.mark.parametrize("event", ["lap.recorded", "session.started", "session.ended"])
+@pytest.mark.parametrize("event", ["lap.recorded", "session.started", "session.ended", "personal_record.broken"])
 def test_timing_event_has_paired_example_and_invalid(event):
     base = os.path.join(EXAMPLES, "timing", f"{event}.v1")
     assert os.path.exists(base + ".example.json"), f"{event} missing example"

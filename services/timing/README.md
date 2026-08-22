@@ -35,6 +35,14 @@ here is **extracted** to `libs/go-pitwall` in Epic 2 (grow-don't-pre-scaffold).
   mutex, so on restore the outbox **flushes automatically** with no loss and no duplicate
   beyond what the consumer's inbox dedupes (NFR2). While down, the heartbeat publish fails
   and is logged+skipped, leaving the liveness touch-file stale — the honest bus-down signal.
+- **Live personal-record detection** (Story 3.4, FR37): a private **`driver_prs`** table
+  holds Timing's LOCAL copy of each driver's all-time PR (an ECST cache — Driver is the
+  system of record). On each counted lap the simulator's lap path consults it
+  (`ObserveLap`): a lap that beats the copy (or a first-ever lap) advances it
+  **optimistically** and enqueues a `personal_record.broken` (one per genuine new best).
+  A second, sim-gated consumer binds Driver's `driver.pr_updated` and **refreshes** the
+  local copy with the confirmed canonical value (latest-confirmed-wins). The whole PR
+  subsystem is gated with the simulator (the only lap source today).
 - Maintains a **liveness touch-file** the Docker `healthcheck` reads.
 - Logs **structured JSON** (one correlationId per process lifecycle) and shuts down
   **gracefully** on SIGTERM/SIGINT, with a bounded best-effort **outbox flush**.
@@ -102,9 +110,11 @@ here is **extracted** to `libs/go-pitwall` in Epic 2 (grow-don't-pre-scaffold).
 | out | `session.started` | `timing.events` / `session.started` | ACTUAL session start (simulator-generated); operator-driven path is Epic 11 |
 | out | `driver.checked_in` | `timing.events` / `driver.checked_in` | gate check-in (Story 2.3); `masterId`, `at`, `checkInMethod` (`qr`\|`transponder`), nullable `transponderId` |
 | out | `lap.recorded` | `timing.events` / `lap.recorded` | one per counted lap; `lapTimeMs` = delta from previous valid crossing |
-| out | `session.ended` | `timing.events` / `session.ended` | carries a minimal per-driver `summary` (tolerant/unpinned v1) |
+| out | `session.ended` | `timing.events` / `session.ended` | carries a minimal per-driver `summary` (pinned since Story 3.3: each row `masterId` + `bestLapMs`/`lapCount`) |
+| out | `personal_record.broken` | `timing.events` / `personal_record.broken` | Story 3.4 (FR37): a counted lap beat the driver's local all-time PR (or set the first); `masterId`, `sessionId`, `lapTimeMs`, `previousMs?` (omitted on a first PR); flow-originating, enqueued right after its lap |
 | out | `identity.lookup_requested` | `frontend.events` / `identity.lookup_requested` | register-first lookup (Story 2.3); simulator impersonates the Frontend producer (`source:"frontend"`) |
 | in | `identity.resolved` | `identity.events` / `identity.resolved` | Identity's reply; idempotent inbox + DLQ/retry/parking; signals the waiting register-first lookup |
+| in | `driver.pr_updated` | `driver.events` / `driver.pr_updated` | Story 3.4 (FR37): Driver's confirmed canonical PR; refreshes Timing's local `driver_prs` copy (second, sim-gated consumer + own queue/DLX) |
 
 ## Run
 

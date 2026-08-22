@@ -83,7 +83,7 @@ Schemas in `/contract/schemas`. `→` lists primary consumers.
 | `lap.recorded` | Valid crossing at the **start-finish line** | `masterId`, `sessionId`, `lapNumber`, `lapTimeMs`, `at` | Driver, Leaderboard, Control Room |
 | `session.started` | **Actual** session start (physical) | `sessionId`, `startedAt` | Booking, Leaderboard, Billing |
 | `session.ended` | **Actual** session end + summary | `sessionId`, `endedAt`, `summary[]` (each row: `masterId`, `bestLapMs`, `lapCount`) | Booking, Billing, Driver, Mailing, Leaderboard |
-| `personal_record.broken` | A driver beat their all-time PR | `masterId`, `sessionId`, `lapTimeMs`, `previousMs` | Driver, Mailing |
+| `personal_record.broken` | A driver beat their all-time PR (or set their first) | `masterId`, `sessionId`, `lapTimeMs`, `previousMs?` | Driver, Mailing |
 | `scanner.offline` | Scanner hardware went silent | `scannerId`, `since`, `gapFrom` | Control Room |
 | `scanner.online` | Scanner recovered | `scannerId`, `at` | Control Room |
 

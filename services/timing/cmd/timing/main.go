@@ -119,15 +119,19 @@ func run() int {
 	// signals the waiting Resolve. Both are wired only when the simulator is on (the only
 	// producer of register-first lookups in this story).
 	var (
-		sim          *simulator.Simulator
-		consumerBus  *messaging.Bus
-		lookupPub    *messaging.Publisher
-		resolveHnd   *consumer.Handler
-		consumerOpts messaging.ConsumerOptions
+		sim            *simulator.Simulator
+		consumerBus    *messaging.Bus
+		lookupPub      *messaging.Publisher
+		resolveHnd     *consumer.Handler
+		consumerOpts   messaging.ConsumerOptions
+		prConsumerBus  *messaging.Bus
+		prRefreshHnd   *consumer.PRRefreshHandler
+		prConsumerOpts messaging.ConsumerOptions
 	)
 	if cfg.SimulatorEnabled {
 		tpStore := persistence.NewTransponderStore(db)
 		heldStore := persistence.NewHeldLineScanStore(db)
+		prStore := persistence.NewDriverPRStore(db)
 
 		lookupPub, err = messaging.Dial(cfg.AMQPURI(), messaging.FrontendEventsExchange)
 		if err != nil {
@@ -200,11 +204,51 @@ func run() int {
 			RecordHeldScan: func(ctx context.Context, token, method, sessionID, occurredAt, reason string) error {
 				return heldStore.Record(ctx, token, method, sessionID, occurredAt, reason, messaging.FormatWireTime(time.Now()))
 			},
+			// Live PR detection (Story 3.4, FR37): consult Timing's local PR copy per
+			// counted lap; Run enqueues personal_record.broken on a break. Gated with the
+			// simulator (the only lap source today), like every other lap-path seam.
+			ObservePR: func(ctx context.Context, masterID, sessionID string, lapTimeMs int64, at string) (bool, *int64, error) {
+				return prStore.ObserveLap(ctx, masterID, sessionID, lapTimeMs, at)
+			},
 			Log: log,
 		})
 		log.Info("simulator enabled (register-first)", "drivers", cfg.SimDrivers, "transponders", cfg.SimTransponders,
 			"sessionLaps", cfg.SimSessionLaps, "lapMeanMs", cfg.SimLapMeanMs, "lapStddevMs", cfg.SimLapStddevMs,
 			"minLapTimeMs", cfg.MinLapTimeMs, "unknownTokenScans", cfg.UnknownTokenScans)
+
+		// PR refresh consumer (Story 3.4, AC2): Timing consumes driver.pr_updated off
+		// driver.events to refresh its local PR copy. The Go consumer runtime is
+		// single-binding-per-queue, so this is a SECOND consumer (own Bus + queue + DLX),
+		// distinct from the identity.resolved one; both are simulator-gated (the PR copy is
+		// only meaningful when detection runs).
+		prConsumerBus, err = messaging.DialConsumer(cfg.AMQPURI(), messaging.TimingExchange)
+		if err != nil {
+			log.Error("failed to connect driver.pr_updated consumer to broker", "error", err.Error())
+			_ = lookupPub.Close()
+			_ = consumerBus.Close()
+			return 1
+		}
+		prRefreshHnd = &consumer.PRRefreshHandler{
+			Validate:  validator.ValidateEnvelopeBytes,
+			Refresher: &consumer.PRStoreRefresher{Store: prStore, Now: func() string { return messaging.FormatWireTime(time.Now()) }},
+			Log:       log,
+			Key:       messaging.DriverPRUpdatedRoutingKey,
+			Policy: dlq.Policy{
+				MaxAttempts: cfg.DLQMaxAttempts,
+				BaseMs:      cfg.DLQRetryBaseMs,
+				Multiplier:  cfg.DLQRetryMultiplier,
+				MaxMs:       cfg.DLQRetryMaxMs,
+			},
+			Retry: prConsumerBus.RetryToDLX,
+			Park:  prConsumerBus.ParkToDLX,
+		}
+		prConsumerOpts = messaging.ConsumerOptions{
+			SourceExchange: messaging.DriverEventsExchange,
+			QueueName:      messaging.DriverPRUpdatedQueue,
+			RoutingKeys:    []string{messaging.DriverPRUpdatedRoutingKey},
+			Prefetch:       cfg.ConsumePrefetch,
+			DLXExchange:    messaging.TimingDLXExchange,
+		}
 	}
 
 	// Run until SIGTERM/SIGINT.
@@ -231,6 +275,7 @@ func run() int {
 	// frontend.events lookup publisher must be live BEFORE the simulator's Prepare
 	// resolves driver ids (Prepare publishes a lookup and blocks on the reply).
 	var consumerDone chan struct{}
+	var prConsumerDone chan struct{}
 	if sim != nil {
 		if err := lookupPub.ConnectAndServe(ctx, log, func(connected bool) {
 			if connected {
@@ -265,6 +310,28 @@ func run() int {
 			"parkingQueue", messaging.ParkingQueueName(messaging.IdentityResolvedQueue), "prefetch", cfg.ConsumePrefetch)
 		consumerDone = make(chan struct{})
 		go func() { resolveHnd.Run(ctx, deliveries); close(consumerDone) }()
+
+		prDeliveries, prErr := prConsumerBus.ConnectAndConsume(ctx, prConsumerOpts, log, func(connected bool) {
+			if connected {
+				log.Info("broker connection established; consuming driver.pr_updated", "queue", messaging.DriverPRUpdatedQueue)
+			} else {
+				log.Warn("broker connection lost; driver.pr_updated will redeliver on reconnect")
+			}
+		})
+		if prErr != nil {
+			log.Error("failed to start the driver.pr_updated consumer supervisor", "error", prErr.Error())
+			_ = pub.Close()
+			_ = lookupPub.Close()
+			_ = consumerBus.Close()
+			_ = prConsumerBus.Close()
+			return 1
+		}
+		log.Info("consuming driver.pr_updated", "queue", messaging.DriverPRUpdatedQueue,
+			"source", messaging.DriverEventsExchange, "dlx", messaging.TimingDLXExchange,
+			"retryQueue", messaging.RetryQueueName(messaging.DriverPRUpdatedQueue),
+			"parkingQueue", messaging.ParkingQueueName(messaging.DriverPRUpdatedQueue), "prefetch", cfg.ConsumePrefetch)
+		prConsumerDone = make(chan struct{})
+		go func() { prRefreshHnd.Run(ctx, prDeliveries); close(prConsumerDone) }()
 	}
 
 	loopDone := make(chan struct{})
@@ -302,6 +369,9 @@ func run() int {
 	if consumerDone != nil {
 		waitFor(shutdownCtx, log, "identity.resolved consumer loop", consumerDone)
 	}
+	if prConsumerDone != nil {
+		waitFor(shutdownCtx, log, "driver.pr_updated consumer loop", prConsumerDone)
+	}
 	waitFor(shutdownCtx, log, "heartbeat loop", loopDone)
 	waitFor(shutdownCtx, log, "relay loop", relayDone)
 
@@ -310,6 +380,11 @@ func run() int {
 	if consumerBus != nil {
 		if cerr := consumerBus.Close(); cerr != nil {
 			log.Error("error closing identity.resolved consumer connection", "error", cerr.Error())
+		}
+	}
+	if prConsumerBus != nil {
+		if cerr := prConsumerBus.Close(); cerr != nil {
+			log.Error("error closing driver.pr_updated consumer connection", "error", cerr.Error())
 		}
 	}
 	if lookupPub != nil {

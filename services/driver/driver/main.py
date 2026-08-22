@@ -35,7 +35,13 @@ from pitwall.relay import Relay
 from pitwall.validate import Validator, resolve_contract_dir
 
 from driver.config import ConfigError, load_config
-from driver.consumer import IDENTITY_RESOLVED_TYPE, LAP_RECORDED_TYPE, SESSION_ENDED_TYPE, Handler
+from driver.consumer import (
+    IDENTITY_RESOLVED_TYPE,
+    LAP_RECORDED_TYPE,
+    PERSONAL_RECORD_BROKEN_TYPE,
+    SESSION_ENDED_TYPE,
+    Handler,
+)
 
 DRIVER_EXCHANGE = "driver.events"
 CONSUMER_QUEUE = "driver.profile-safety-net"
@@ -199,7 +205,7 @@ def main() -> int:
                         bindings=[
                             Binding(
                                 source_exchange=cfg.timing_exchange,
-                                routing_keys=[LAP_RECORDED_TYPE, SESSION_ENDED_TYPE],
+                                routing_keys=[LAP_RECORDED_TYPE, SESSION_ENDED_TYPE, PERSONAL_RECORD_BROKEN_TYPE],
                             ),
                             Binding(source_exchange=cfg.identity_exchange, routing_keys=[IDENTITY_RESOLVED_TYPE]),
                         ],

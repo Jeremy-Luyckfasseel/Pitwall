@@ -26,6 +26,13 @@ func FormatWireTime(t time.Time) string {
 	return t.UTC().Format(wireTimeLayout)
 }
 
+// ParseWireTime parses a canonical wire-format timestamp (the inverse of
+// FormatWireTime). It requires the exact 3-digit-millis, literal-'Z' layout, so a
+// non-conforming string (e.g. missing milliseconds or a numeric offset) is an error.
+func ParseWireTime(s string) (time.Time, error) {
+	return time.Parse(wireTimeLayout, s)
+}
+
 // Envelope is the standard message envelope (all 9 fields). Field names are the
 // camelCase wire names. CausationID is a pointer so a flow-originating event
 // serializes as `null` (the key must be present, never omitted).

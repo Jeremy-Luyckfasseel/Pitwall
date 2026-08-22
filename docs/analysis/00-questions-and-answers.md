@@ -1523,3 +1523,76 @@ reference a `masterId` with no `driver_profiles` row). Whether the safety-net pr
 only on a genuine first creation), so no new duplicate-publish path is introduced.
 *Rejected:* store-summary-only — would allow a summary/lap row to dangle against an unknown driver,
 breaking the local-consistency invariant the safety net exists to hold.
+
+---
+
+## Round 37 — Story 3.4 Canonical PR & live PR detection: Timing's detection site, first-PR semantics, in-session best, and Driver's confirm rule (2026-08-22)
+
+> Surfaced while drafting **Story 3.4** (Canonical personal record and live PR detection). The epic
+> AC and both service docs (`docs/analysis/services/timing.md#personal-records`,
+> `docs/analysis/services/driver.md#compute-vs-store-pr`) fix the *shape* of the flow — Timing keeps a
+> local all-time-PR copy, compares on each lap, emits `personal_record.broken {masterId, sessionId,
+> lapTimeMs, previousMs}`; Driver is SoR, confirms + stores the canonical PR, publishes
+> `driver.pr_updated`, which Timing consumes to refresh its copy — and the bus catalog fixes the two
+> payloads (`personal_record.broken {masterId, sessionId, lapTimeMs, previousMs}`;
+> `driver.pr_updated {masterId, lapTimeMs, setAt}`). But four decisions are **not** answered anywhere
+> and materially change the contract schema and both services' code. All asked per the golden rule
+> (CLAUDE.md §0). Context: the **simulator is Timing's only lap source today** (no real scanner until
+> later, and even Story 3.5's scanner-offline is simulator-driven); the Go consumer runtime binds
+> **one** source exchange per queue (`libs/go-pitwall/messaging` `ConsumerOptions.SourceExchange`,
+> single-valued — unlike the Python multi-binding added in Story 3.2).
+
+**Q37.1 — Where does Timing's PR detection live in the lap pipeline?**
+A: **A pure domain PR-detector + a durable per-driver PR store, consulted from the lap-production
+path.** Add `driver_prs` (Timing-local, keyed on `masterId`) and a pure `domain` rule
+(`current *int64, lapMs int64) -> (broken bool, previousMs *int64)`); the simulator's lap-production
+path consults it as each **counted** lap is produced (right where it already aggregates the session
+summary) and enqueues `personal_record.broken` through the **same Story-1.4 outbox**. The
+detector/store are I/O-shaped for reuse by a future real scanner, but detection is **effectively
+simulator-gated today** exactly as lap production already is. *Rejected:* a Timing self-consumer of
+its own `timing.events` `lap.recorded` — cleaner producer/consumer separation for a future scanner,
+but Timing consuming its own published event adds re-entrancy, a second queue+DLX, and latency for no
+benefit while the simulator is the only lap source.
+
+**Q37.2 — Does a driver's FIRST-ever counted lap (no prior PR) emit `personal_record.broken`?**
+A: **Yes — emit, with `previousMs` omitted.** The first counted lap for a `masterId` with no local PR
+publishes `personal_record.broken { masterId, sessionId, lapTimeMs }` with **`previousMs` absent**, so
+the schema makes **`previousMs` optional** (`masterId`, `sessionId`, `lapTimeMs` required). One
+uniform "on each lap, compare; if beaten, publish" path (matching timing.md), and Driver learns the
+initial PR from the event like any other. *Rejected:* seed the local PR silently and only emit on
+beating an existing PR (`previousMs` required) — two detection code paths and it would force Driver to
+grow a separate lap-history PR path just to establish the first PR.
+
+**Q37.3 — How does Timing's local PR copy behave on repeated improvements within one session (before
+`driver.pr_updated` returns)?**
+A: **Advance optimistically on each detected break.** Timing lowers its local PR copy the moment it
+detects a break, so a session with several improving laps emits **one `personal_record.broken` per
+genuine new best** (each `previousMs` = the value it just beat). `driver.pr_updated` later reconciles
+the SoR-confirmed value into the same local copy (a no-op when they agree). Matches real racing (every
+improving lap is a new PR) and needs no waiting on the round-trip. *Rejected:* change the local copy
+only on `driver.pr_updated` — either re-emits on every session lap beating a stale confirmed value
+(noise) or needs ad-hoc session-best dedupe, both worse.
+
+**Q37.4 — On `personal_record.broken`, how does Driver (SoR) "confirm" before publishing
+`driver.pr_updated`?**
+A: **Recompute authoritatively from `driver_laps`, publish only on a real change.** Driver treats
+`personal_record.broken` as a **trigger**, then computes the canonical all-time PR as the **min
+`lap_time_ms` across its own `driver_laps` history** (the SoR built in Story 3.3), stores it as the
+canonical PR, and publishes `driver.pr_updated { masterId, lapTimeMs, setAt }` **only when the
+canonical value actually changes** (idempotent — a redelivered or already-confirmed break republishes
+nothing). `setAt` = the `at` (wire time) of the record-setting lap row. Driver never blindly trusts
+Timing's claimed `lapTimeMs`. *Rejected:* store Timing's claimed `lapTimeMs` if lower than the stored
+PR without cross-checking `driver_laps` — less DB work, but Driver would stop being an independent SoR
+and a single bad/late claim would propagate as canonical.
+>
+> **Derived, not separately asked (follow from the above + the committed corpus):**
+> - **`personal_record.broken` payload** = `{ masterId, sessionId, lapTimeMs, previousMs? }` (bus
+>   catalog; `previousMs` optional per Q37.2). **`driver.pr_updated` payload** = `{ masterId,
+>   lapTimeMs, setAt }` (bus catalog; `setAt` = record-setting lap's `at`, per Q37.4).
+> - **Timing's `driver.pr_updated` consumer** binds `driver.events` on its **own second queue**
+>   (`timing.driver-pr-updated`) with its own DLX (`timing.dlx`), mirroring the existing sim-gated
+>   `identity.resolved` consumer — because the Go runtime is single-binding-per-queue. The whole PR
+>   subsystem (store + detection + refresh consumer) is **gated with the simulator**, consistent with
+>   lap production being simulator-only today.
+> - **Timing's local PR copy is the ECST cache; Driver's `driver_prs`/history is canonical** — the
+>   local copy is refreshed by `driver.pr_updated`, never treated as SoR (timing.md).

@@ -99,6 +99,53 @@ func TestNewSessionEndedEnvelope_Validates(t *testing.T) {
 	}
 }
 
+func TestNewPersonalRecordBrokenEnvelope_Validates(t *testing.T) {
+	v := testValidator(t)
+	at := time.Date(2026, 6, 5, 14, 3, 21, 500_000_000, time.UTC)
+	previous := int64(42318)
+	env := NewPersonalRecordBrokenEnvelope("timing", "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
+		fixtureMasterID, "sim-20260605T140000000Z", 41980, &previous, at)
+
+	if env.Type != PersonalRecordBrokenRoutingKey {
+		t.Errorf("Type = %q, want %q", env.Type, PersonalRecordBrokenRoutingKey)
+	}
+	if env.OccurredAt != "2026-06-05T14:03:21.500Z" {
+		t.Errorf("OccurredAt = %q, want pinned wire format", env.OccurredAt)
+	}
+	d, ok := env.Data.(PersonalRecordBrokenData)
+	if !ok {
+		t.Fatalf("Data is %T, want PersonalRecordBrokenData", env.Data)
+	}
+	if d.LapTimeMs != 41980 || d.PreviousMs == nil || *d.PreviousMs != 42318 {
+		t.Errorf("lapTimeMs/previousMs = %d/%v, want 41980/42318", d.LapTimeMs, d.PreviousMs)
+	}
+	if err := v.ValidateEnvelopeBytes(mustMarshal(t, env)); err != nil {
+		t.Fatalf("generated personal_record.broken rejected by /contract: %v", err)
+	}
+}
+
+// AC1 / Q37.2: a FIRST-ever PR omits previousMs entirely and still validates (previousMs
+// is optional; the field must NOT serialize as null, which the schema would reject).
+func TestNewPersonalRecordBrokenEnvelope_FirstPR_OmitsPreviousAndValidates(t *testing.T) {
+	v := testValidator(t)
+	at := time.Date(2026, 6, 5, 14, 3, 21, 500_000_000, time.UTC)
+	env := NewPersonalRecordBrokenEnvelope("timing", "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
+		fixtureMasterID, "sim-x", 41980, nil, at)
+
+	body := mustMarshal(t, env)
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	d := m["data"].(map[string]any)
+	if _, present := d["previousMs"]; present {
+		t.Error("first-PR personal_record.broken must OMIT previousMs (schema rejects null)")
+	}
+	if err := v.ValidateEnvelopeBytes(body); err != nil {
+		t.Fatalf("first-PR personal_record.broken rejected by /contract: %v", err)
+	}
+}
+
 // CausationID must serialize as JSON null (present, never omitted) for a
 // flow-originating simulator event (AR7 / wire MUST).
 func TestDomainEnvelopes_CausationIDSerializesNull(t *testing.T) {

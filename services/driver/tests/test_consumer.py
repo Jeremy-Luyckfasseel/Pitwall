@@ -486,3 +486,159 @@ def test_session_ended_summary_row_missing_master_id_is_parked(conn):
     # Parked BEFORE any write -- nothing partially stored.
     assert conn.execute("SELECT COUNT(*) FROM driver_session_summaries").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM driver_profiles").fetchone()[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# personal_record.broken (Story 3.4, AC3) -- confirm the canonical PR from history.
+# ---------------------------------------------------------------------------
+from driver.consumer import PERSONAL_RECORD_BROKEN_TYPE  # noqa: E402
+from driver.persistence.history import append_lap  # noqa: E402
+from pitwall.persistence import within_tx  # noqa: E402
+
+
+def _pr_broken_bytes(
+    envelope_id: str,
+    master_id: str,
+    lap_time_ms: int,
+    session_id: str = SESSION,
+    correlation_id: str = CORRELATION_ID,
+    occurred_at: str = "2026-05-31T14:03:21.500Z",
+) -> bytes:
+    return json.dumps(
+        {
+            "id": envelope_id,
+            "type": PERSONAL_RECORD_BROKEN_TYPE,
+            "source": "timing",
+            "schemaVersion": 1,
+            "envelopeVersion": 1,
+            "occurredAt": occurred_at,
+            "correlationId": correlation_id,
+            "causationId": None,
+            "data": {"masterId": master_id, "sessionId": session_id, "lapTimeMs": lap_time_ms},
+        }
+    ).encode("utf-8")
+
+
+def _seed_lap(conn, master_id, lap_number, lap_time_ms, at, event_id, session_id=SESSION):
+    with within_tx(conn):
+        append_lap(conn, master_id, session_id, lap_number, lap_time_ms, at, event_id, "2026-05-31T14:05:00.000Z")
+
+
+def _pr_row(conn, master_id=MASTER_ID):
+    return conn.execute(
+        "SELECT best_lap_ms, session_id, set_at FROM driver_prs WHERE master_id = ?", (master_id,)
+    ).fetchone()
+
+
+def test_pr_broken_with_matching_lap_in_history_publishes_pr_updated(conn):
+    """AC3: the record lap is already in driver_laps -> canonical PR recomputed from
+    history, driver.pr_updated published with setAt = that lap's `at`."""
+    log = FakeLog()
+    notified = []
+    handler = _handler(conn, log, notify=lambda: notified.append(1))
+    # Seed a profile + the record lap (so the safety net does not also enqueue a profile_updated).
+    handler.process(FakeDelivery(body=_envelope_bytes("00000000-0000-0000-0000-000000000301", LAP_RECORDED_TYPE, MASTER_ID)))
+    _seed_lap(conn, MASTER_ID, 2, 41980, "2026-05-31T14:02:00.000Z", "evt-fast")
+    before = len(outbox_fetch_pending(conn, 50))
+
+    handler.process(FakeDelivery(body=_pr_broken_bytes("00000000-0000-0000-0000-000000000302", MASTER_ID, 41980)))
+
+    outbox = outbox_fetch_pending(conn, 50)
+    pr_events = [o for o in outbox if o.routing_key == "driver.pr_updated"]
+    assert len(pr_events) == 1
+    row = _pr_row(conn)
+    assert row[0] == 41980
+    assert row[2] == "2026-05-31T14:02:00.000Z"  # setAt from the record lap
+    assert len(outbox) == before + 1
+    assert log.has("info", "canonical PR confirmed")
+
+
+def test_pr_broken_when_record_lap_not_yet_in_history_uses_event_claim(conn):
+    """Q37.4 arrival-order robustness: the record lap.recorded has not arrived yet ->
+    canonical PR is set from the event's claimed lapTimeMs, setAt = the break's occurredAt."""
+    log = FakeLog()
+    handler = _handler(conn, log)
+    handler.process(FakeDelivery(body=_pr_broken_bytes(
+        "00000000-0000-0000-0000-000000000303", MASTER_ID, 40500, occurred_at="2026-05-31T14:09:00.000Z")))
+
+    row = _pr_row(conn)
+    assert row is not None
+    assert row[0] == 40500
+    assert row[2] == "2026-05-31T14:09:00.000Z"  # fallback to the break's occurredAt
+    assert len([o for o in outbox_fetch_pending(conn, 50) if o.routing_key == "driver.pr_updated"]) == 1
+
+
+def test_pr_broken_that_does_not_beat_stored_pr_publishes_nothing(conn):
+    """A second break whose value does not beat the stored canonical PR -> no
+    driver.pr_updated (idempotent, publish-only-on-change, Q37.4)."""
+    log = FakeLog()
+    handler = _handler(conn, log)
+    _seed_lap(conn, MASTER_ID, 1, 41000, "2026-05-31T14:01:00.000Z", "evt-a")
+    handler.process(FakeDelivery(body=_pr_broken_bytes("00000000-0000-0000-0000-000000000304", MASTER_ID, 41000)))
+    assert len([o for o in outbox_fetch_pending(conn, 50) if o.routing_key == "driver.pr_updated"]) == 1
+
+    # A slower claim (and no faster lap in history) must not change the PR or republish.
+    handler.process(FakeDelivery(body=_pr_broken_bytes("00000000-0000-0000-0000-000000000305", MASTER_ID, 42000)))
+    assert _pr_row(conn)[0] == 41000
+    assert len([o for o in outbox_fetch_pending(conn, 50) if o.routing_key == "driver.pr_updated"]) == 1
+
+
+def test_pr_broken_redelivery_is_a_no_op(conn):
+    """AC3 idempotency: a redelivered personal_record.broken (same id) publishes no
+    second driver.pr_updated."""
+    log = FakeLog()
+    handler = _handler(conn, log)
+    _seed_lap(conn, MASTER_ID, 1, 41000, "2026-05-31T14:01:00.000Z", "evt-a")
+    body = _pr_broken_bytes("00000000-0000-0000-0000-000000000306", MASTER_ID, 41000)
+    handler.process(FakeDelivery(body=body))
+    n_after_first = len([o for o in outbox_fetch_pending(conn, 50) if o.routing_key == "driver.pr_updated"])
+    assert n_after_first == 1
+
+    handler.process(FakeDelivery(body=body))  # same envelope id
+    assert len([o for o in outbox_fetch_pending(conn, 50) if o.routing_key == "driver.pr_updated"]) == 1
+    assert log.has("debug", "duplicate envelope ignored")
+
+
+def test_pr_broken_for_unknown_master_id_runs_safety_net(conn):
+    """AC3: a break for a not-yet-local masterId creates the minimal profile first
+    (safety net) so the PR row never references an unknown driver."""
+    log = FakeLog()
+    handler = _handler(conn, log, notify=lambda: None)
+    handler.process(FakeDelivery(body=_pr_broken_bytes("00000000-0000-0000-0000-000000000307", MASTER_ID, 40000)))
+
+    assert conn.execute("SELECT 1 FROM driver_profiles WHERE master_id = ?", (MASTER_ID,)).fetchone() is not None
+    outbox = outbox_fetch_pending(conn, 50)
+    routing = sorted(o.routing_key for o in outbox)
+    assert "driver.profile_updated" in routing  # safety net fired
+    assert "driver.pr_updated" in routing       # PR confirmed from the event claim
+
+
+def test_pr_broken_missing_lap_time_is_parked_before_any_write(conn):
+    log = FakeLog()
+    parked = []
+    handler = Handler(
+        validate=lambda body: None,
+        conn=conn,
+        source="driver",
+        policy=Policy(max_attempts=3, base_ms=100, multiplier=2, max_ms=1000),
+        log=log,
+        park=lambda body, reason: parked.append(reason),
+        now=lambda: NOW,
+    )
+    body = json.dumps(
+        {
+            "id": "00000000-0000-0000-0000-000000000308",
+            "type": PERSONAL_RECORD_BROKEN_TYPE,
+            "source": "timing",
+            "schemaVersion": 1,
+            "envelopeVersion": 1,
+            "occurredAt": "2026-05-31T14:03:21.500Z",
+            "correlationId": CORRELATION_ID,
+            "causationId": None,
+            "data": {"masterId": MASTER_ID, "sessionId": SESSION},  # no lapTimeMs
+        }
+    ).encode("utf-8")
+    handler.process(FakeDelivery(body=body))
+
+    assert parked == ["malformed-personal-record-broken"]
+    assert conn.execute("SELECT COUNT(*) FROM driver_prs").fetchone()[0] == 0

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/timing/personal_record.broken.v1.schema.json",
+  "title": "timing / personal_record.broken (v1) data payload",
+  "description": "Timing detected — from the live lap stream — that a driver's counted lap beat their all-time personal record held in Timing's local copy (or set their first-ever PR). Published to the 'timing.events' exchange with routing key 'personal_record.broken'. Driver is the system of record: it confirms the canonical PR from its own lap history and re-publishes driver.pr_updated (Story 3.4, FR37/FR11); Mailing (Epic 10) may alert on it. previousMs is OMITTED on a first-ever PR (there is nothing to beat) and PRESENT (the value just beaten) on a subsequent break — Story 3.4 / Q&A Round 37 / Q37.2.",
+  "type": "object",
+  "required": ["masterId", "sessionId", "lapTimeMs"],
+  "properties": {
+    "masterId": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "Canonical masterId issued by Identity. Lowercase canonical UUID v4 (version nibble 4, variant nibble [89ab]); the pattern is enforced (format is annotation-only)."
+    },
+    "sessionId": {
+      "type": "string",
+      "description": "Session the record-setting lap belongs to. Same id space as lap.recorded.sessionId / session.ended.sessionId."
+    },
+    "lapTimeMs": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The record-setting lap time, in milliseconds (the new best)."
+    },
+    "previousMs": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The all-time PR that was just beaten, in milliseconds. OPTIONAL: absent on a first-ever PR (nothing to beat). When present, it is strictly greater than lapTimeMs."
+    }
+  }
+}

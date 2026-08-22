@@ -8,6 +8,9 @@ dedupes on the envelope id (idempotent inbox) and applies the per-type effect:
   - session.ended      -> for EACH summary row: safety net + store the per-session
                           summary + enqueue one driver.history_appended (Story 3.3,
                           FR10 / Q&A Round 36 Q36.2/Q36.3).
+  - personal_record.broken -> safety net + recompute the canonical PR from driver_laps
+                          (authoritative, Q37.4) + enqueue driver.pr_updated ONLY on a
+                          real change (Story 3.4, FR11).
 
 The safety net create-if-absent runs for every masterId seen (a lap.recorded masterId
 or each session.ended summary-row masterId, Q36.3), so no lap/summary row can reference
@@ -20,12 +23,14 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 from driver.domain.history import build_history_appended
+from driver.domain.pr import build_pr_updated
 from driver.domain.profile import MinimalProfile, build_profile_updated
 from driver.persistence.history import append_lap, upsert_session_summary
+from driver.persistence.pr import history_best, read_pr, upsert_pr
 from driver.persistence.profiles import insert_minimal_profile
 from pitwall.dlq import Policy, next_retry
 from pitwall.envelope import decode_incoming, format_wire_time
@@ -35,8 +40,14 @@ from pitwall.persistence import inbox_has_seen, inbox_mark_seen, outbox_enqueue,
 LAP_RECORDED_TYPE = "lap.recorded"
 IDENTITY_RESOLVED_TYPE = "identity.resolved"
 SESSION_ENDED_TYPE = "session.ended"
+PERSONAL_RECORD_BROKEN_TYPE = "personal_record.broken"
 
-_HANDLED_TYPES = (LAP_RECORDED_TYPE, IDENTITY_RESOLVED_TYPE, SESSION_ENDED_TYPE)
+_HANDLED_TYPES = (
+    LAP_RECORDED_TYPE,
+    IDENTITY_RESOLVED_TYPE,
+    SESSION_ENDED_TYPE,
+    PERSONAL_RECORD_BROKEN_TYPE,
+)
 
 
 class _PayloadError(Exception):
@@ -74,6 +85,14 @@ class _SessionEnded:
     rows: list[_SummaryRow]
 
 
+@dataclass(frozen=True)
+class _PersonalRecordBroken:
+    master_id: str
+    session_id: str
+    lap_time_ms: int
+    occurred_at: str  # the break envelope's occurredAt -- the set_at fallback (Q37.4)
+
+
 # ---------------------------------------------------------------------------
 # Results of the transactional cores.
 # ---------------------------------------------------------------------------
@@ -107,6 +126,18 @@ class SessionEndedResult:
     @property
     def enqueued(self) -> bool:
         return self.histories_appended > 0 or self.profiles_created > 0
+
+
+@dataclass(frozen=True)
+class PRResult:
+    duplicate: bool
+    profile_created: bool = False
+    pr_published: bool = False
+    new_pr_ms: int | None = None
+
+    @property
+    def enqueued(self) -> bool:
+        return self.profile_created or self.pr_published
 
 
 def _ensure_profile_within_tx(
@@ -218,6 +249,65 @@ def process_session_ended(
     )
 
 
+def process_personal_record_broken(
+    conn: sqlite3.Connection,
+    source: str,
+    envelope_id: str,
+    event_type: str,
+    correlation_id: str,
+    pr: _PersonalRecordBroken,
+    at: str,
+) -> PRResult:
+    """personal_record.broken (AC3): inbox-dedupe -> safety net (unknown masterId) ->
+    recompute the canonical PR authoritatively from driver_laps (Q37.4) -> on a REAL
+    change store it + enqueue one driver.pr_updated -> single inbox-mark, one transaction.
+
+    The canonical value is min(fastest lap in driver_laps, the event's claimed lapTimeMs):
+    history is authoritative, and the event's claim is folded in only as an arrival-order
+    floor (it can only LOWER the PR and corresponds to a real Timing-observed lap that will
+    land in history). driver.pr_updated is published ONLY when the canonical value actually
+    changes -- a redelivered or already-confirmed break republishes nothing (NFR3)."""
+    with within_tx(conn):
+        if inbox_has_seen(conn, envelope_id):
+            return PRResult(duplicate=True)
+        created = _ensure_profile_within_tx(conn, source, pr.master_id, envelope_id, correlation_id, at)
+
+        hist = history_best(conn, pr.master_id)  # (lap_time_ms, session_id, at) | None
+        if hist is None or pr.lap_time_ms < hist[0]:
+            # No matching lap in history yet (or the event beats everything stored) ->
+            # trust the event's claim as the floor; set_at falls back to the break's
+            # occurredAt and the event's session.
+            candidate, cand_session, cand_set_at = pr.lap_time_ms, pr.session_id, pr.occurred_at
+        else:
+            # History holds the record-setting lap (authoritative) -> use its value/at.
+            candidate, cand_session, cand_set_at = hist[0], hist[1], hist[2]
+
+        stored = read_pr(conn, pr.master_id)
+        published = False
+        if stored is None or candidate < stored:
+            upsert_pr(conn, pr.master_id, candidate, cand_session, cand_set_at, at)
+            env = build_pr_updated(
+                source=source,
+                correlation_id=correlation_id,
+                causation_id=envelope_id,
+                occurred_at=at,
+                master_id=pr.master_id,
+                lap_time_ms=candidate,
+                set_at=cand_set_at,
+            )
+            payload = env.model_dump_json(by_alias=True, exclude_none=False).encode("utf-8")
+            outbox_enqueue(conn, env.id, env.type, payload, created_at=at)
+            published = True
+
+        inbox_mark_seen(conn, envelope_id, event_type, at)
+    return PRResult(
+        duplicate=False,
+        profile_created=created,
+        pr_published=published,
+        new_pr_ms=candidate if published else None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Payload parsing (pure, no I/O; raises _PayloadError -> park before any write).
 # ---------------------------------------------------------------------------
@@ -275,6 +365,15 @@ def _parse_session_ended(data: dict) -> _SessionEnded:
     return _SessionEnded(session_id=session_id, rows=rows)
 
 
+def _parse_personal_record_broken(data: dict, occurred_at: str) -> _PersonalRecordBroken:
+    return _PersonalRecordBroken(
+        master_id=_require_str(data, "masterId", "missing-master-id"),
+        session_id=_require_str(data, "sessionId", "malformed-personal-record-broken"),
+        lap_time_ms=_require_int(data, "lapTimeMs", "malformed-personal-record-broken"),
+        occurred_at=occurred_at,
+    )
+
+
 @dataclass
 class Handler:
     """Processes one delivery at a time. validate/retry/park/notify are injected so this
@@ -320,7 +419,7 @@ class Handler:
         # Parse + shape-check the payload BEFORE opening any transaction, so a malformed
         # message parks cleanly with no partial write.
         try:
-            parsed = self._parse(env.type, data)
+            parsed = self._parse(env.type, data, env.occurred_at)
         except _PayloadError as e:
             self.log.error("rejecting message with malformed payload", reason=e.reason, eventId=env.id, type=env.type)
             self._park(delivery, body, e.reason)
@@ -339,11 +438,13 @@ class Handler:
         self._ack(delivery)
         self._log_and_notify(env, result)
 
-    def _parse(self, event_type: str, data: dict):
+    def _parse(self, event_type: str, data: dict, occurred_at: str):
         if event_type == LAP_RECORDED_TYPE:
             return _parse_lap(data)
         if event_type == SESSION_ENDED_TYPE:
             return _parse_session_ended(data)
+        if event_type == PERSONAL_RECORD_BROKEN_TYPE:
+            return _parse_personal_record_broken(data, occurred_at)
         # identity.resolved: only masterId is needed for the safety net.
         return _require_str(data, "masterId", "missing-master-id")
 
@@ -356,6 +457,10 @@ class Handler:
             return process_session_ended(
                 self.conn, self.source, env.id, env.type, env.correlation_id, parsed, at
             )
+        if env.type == PERSONAL_RECORD_BROKEN_TYPE:
+            return process_personal_record_broken(
+                self.conn, self.source, env.id, env.type, env.correlation_id, parsed, at
+            )
         return process_identity_resolved(
             self.conn, self.source, env.id, env.type, env.correlation_id, parsed, at
         )
@@ -365,7 +470,19 @@ class Handler:
             self.log.debug("duplicate envelope ignored (idempotent inbox)", eventId=env.id, type=env.type)
             return
 
-        if isinstance(result, SessionEndedResult):
+        if isinstance(result, PRResult):
+            if result.pr_published:
+                self.log.info(
+                    "canonical PR confirmed and driver.pr_updated published",
+                    eventId=env.id, type=env.type, correlationId=env.correlation_id,
+                    lapTimeMs=result.new_pr_ms, profileCreated=result.profile_created,
+                )
+            else:
+                self.log.debug(
+                    "personal_record.broken did not change the canonical PR; nothing published",
+                    eventId=env.id, type=env.type, correlationId=env.correlation_id,
+                )
+        elif isinstance(result, SessionEndedResult):
             self.log.info(
                 "session summaries stored and history appended",
                 eventId=env.id, type=env.type, correlationId=env.correlation_id,

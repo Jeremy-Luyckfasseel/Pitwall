@@ -71,7 +71,15 @@ type Config struct {
 	// RecordHeldScan error is fatal to Run, the same escalation tier as an Enqueue
 	// failure. Required only when UnknownTokenScans > 0.
 	RecordHeldScan func(ctx context.Context, token, method, sessionID, occurredAt, reason string) error
-	Log            *slog.Logger
+	// ObservePR is the live PR-detection seam (Story 3.4, FR37): for each COUNTED lap it
+	// consults Timing's durable local PR copy (persistence.DriverPRStore.ObserveLap) and
+	// reports whether the lap broke the driver's all-time PR (and, on a subsequent break,
+	// the value beaten — nil on a first PR, Q37.2). On a break Run enqueues a
+	// personal_record.broken right after the lap. Optional: nil disables PR detection (the
+	// whole PR subsystem is simulator-gated). When set, an ObservePR error is FATAL to Run
+	// (same tier as an Enqueue failure) — a detected PR is never silently dropped.
+	ObservePR func(ctx context.Context, masterID, sessionID string, lapTimeMs int64, at string) (broken bool, previousMs *int64, err error)
+	Log       *slog.Logger
 }
 
 // HeldScan is a line-crossing whose token had no completed check-in this session — the
@@ -211,6 +219,19 @@ func (s *Simulator) Run(ctx context.Context) error {
 				}
 				return fmt.Errorf("simulator enqueue %s: %w", env.Type, err)
 			}
+			// Live PR detection (Story 3.4, FR37): after a counted lap is enqueued, consult
+			// Timing's local PR copy; on a break enqueue a personal_record.broken right
+			// after the lap (same correlationId, flow-originating). Detection is stateful
+			// (all-time, cross-session) so it lives here in Run's I/O path, not in the pure
+			// GenerateSession. Only wired when the PR subsystem is enabled (ObservePR != nil).
+			if s.cfg.ObservePR != nil && env.Type == messaging.LapRecordedRoutingKey {
+				if perr := s.observePR(ctx, env); perr != nil {
+					if ctx.Err() != nil {
+						return nil
+					}
+					return perr
+				}
+			}
 			if !sleep(ctx, s.cfg.Tick) {
 				return nil
 			}
@@ -219,6 +240,39 @@ func (s *Simulator) Run(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+// observePR runs live PR detection for one counted lap.recorded envelope (Story 3.4): it
+// consults Timing's local PR copy via the ObservePR seam and, on a break, enqueues a
+// personal_record.broken carrying the lap's masterId/sessionId/lapTimeMs (previousMs nil
+// on a first PR) with the same correlationId, flow-originating. Any seam/enqueue error is
+// returned to Run as fatal — a detected PR is never silently dropped.
+func (s *Simulator) observePR(ctx context.Context, lapEnv messaging.Envelope) error {
+	d, ok := lapEnv.Data.(messaging.LapRecordedData)
+	if !ok {
+		// Defensive: Run only calls this for lap.recorded envelopes, which always carry
+		// LapRecordedData. A mismatch is a programmer error, surfaced rather than ignored.
+		return fmt.Errorf("simulator observePR: lap.recorded envelope carried %T, want LapRecordedData", lapEnv.Data)
+	}
+	broken, previousMs, err := s.cfg.ObservePR(ctx, d.MasterID, d.SessionID, d.LapTimeMs, d.At)
+	if err != nil {
+		return fmt.Errorf("simulator observe pr %s: %w", d.MasterID, err)
+	}
+	if !broken {
+		return nil
+	}
+	at, err := messaging.ParseWireTime(d.At)
+	if err != nil {
+		return fmt.Errorf("simulator observe pr %s: parse lap time %q: %w", d.MasterID, d.At, err)
+	}
+	brokenEnv := messaging.NewPersonalRecordBrokenEnvelope(
+		s.cfg.Source, lapEnv.CorrelationID, d.MasterID, d.SessionID, d.LapTimeMs, previousMs, at)
+	if err := s.cfg.Enqueue(ctx, brokenEnv); err != nil {
+		return fmt.Errorf("simulator enqueue personal_record.broken %s: %w", d.MasterID, err)
+	}
+	s.logInfo("personal record broken", "masterId", d.MasterID, "sessionId", d.SessionID,
+		"lapTimeMs", d.LapTimeMs, "correlationId", lapEnv.CorrelationID)
+	return nil
 }
 
 // GenerateSession produces one complete session's events in time order: session.started,

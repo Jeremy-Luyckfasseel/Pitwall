@@ -145,6 +145,41 @@ func TestSessionEndedData_MatchesGeneratedDTO(t *testing.T) {
 	}
 }
 
+func TestPersonalRecordBrokenData_MatchesGeneratedDTO(t *testing.T) {
+	previous := int64(42318)
+	handWritten := PersonalRecordBrokenData{
+		MasterID:   "1a9f7c20-3e84-4d11-9aa2-7b6c5e4d3f21",
+		SessionID:  "session-2026-05-31-evening-heat-3",
+		LapTimeMs:  41980,
+		PreviousMs: &previous,
+	}
+	prev := int(previous)
+	generated := timingcodegen.PersonalRecordBrokenV1SchemaJson{
+		MasterID:   handWritten.MasterID,
+		SessionID:  handWritten.SessionID,
+		LapTimeMs:  int(handWritten.LapTimeMs),
+		PreviousMs: &prev,
+	}
+
+	// With previousMs PRESENT both types marshal to identical wire JSON.
+	got, want := marshalToMap(t, handWritten), marshalToMap(t, generated)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("PersonalRecordBrokenData diverges from the generated DTO:\n  hand-written: %#v\n  generated:    %#v", got, want)
+	}
+
+	// FIRST-PR case (Q37.2): the hand-written struct OMITS previousMs entirely (its
+	// `,omitempty` tag) — the schema-correct representation, since previousMs is
+	// `type: integer` (not nullable) and simply absent on a first PR. The generated DTO
+	// (--disable-omitempty) instead emits `previousMs: null`, which the schema REJECTS,
+	// so the two intentionally diverge here and only the hand-written struct is used to
+	// publish. Assert the hand-written struct omits the key.
+	handWritten.PreviousMs = nil
+	got = marshalToMap(t, handWritten)
+	if _, present := got["previousMs"]; present {
+		t.Error("first-PR personal_record.broken must OMIT previousMs (not emit null)")
+	}
+}
+
 func TestCheckedInData_MatchesGeneratedDTO(t *testing.T) {
 	tp := "TP-00421"
 	handWritten := CheckedInData{
