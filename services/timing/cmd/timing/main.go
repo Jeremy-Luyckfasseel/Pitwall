@@ -132,6 +132,7 @@ func run() int {
 		tpStore := persistence.NewTransponderStore(db)
 		heldStore := persistence.NewHeldLineScanStore(db)
 		prStore := persistence.NewDriverPRStore(db)
+		outageStore := persistence.NewScannerOutageStore(db)
 
 		lookupPub, err = messaging.Dial(cfg.AMQPURI(), messaging.FrontendEventsExchange)
 		if err != nil {
@@ -210,11 +211,20 @@ func run() int {
 			ObservePR: func(ctx context.Context, masterID, sessionID string, lapTimeMs int64, at string) (bool, *int64, error) {
 				return prStore.ObserveLap(ctx, masterID, sessionID, lapTimeMs, at)
 			},
-			Log: log,
+			// Scanner-offline (Story 3.5, FR38): inject an outage window that drops crossings
+			// (the honest gap, never faked) and persist it durably. Sim-gated like every other
+			// lap-path seam; the migration is unconditional (always applied by Open).
+			ScannerOutageLaps: cfg.SimScannerOutageLaps,
+			OpenOutage: func(ctx context.Context, scannerID, sessionID, gapFrom, since, recordedAt string) (int64, error) {
+				return outageStore.OpenOutage(ctx, scannerID, sessionID, gapFrom, since, recordedAt)
+			},
+			CloseOutage: outageStore.CloseOutage,
+			Log:         log,
 		})
 		log.Info("simulator enabled (register-first)", "drivers", cfg.SimDrivers, "transponders", cfg.SimTransponders,
 			"sessionLaps", cfg.SimSessionLaps, "lapMeanMs", cfg.SimLapMeanMs, "lapStddevMs", cfg.SimLapStddevMs,
-			"minLapTimeMs", cfg.MinLapTimeMs, "unknownTokenScans", cfg.UnknownTokenScans)
+			"minLapTimeMs", cfg.MinLapTimeMs, "unknownTokenScans", cfg.UnknownTokenScans,
+			"scannerOutageLaps", cfg.SimScannerOutageLaps)
 
 		// PR refresh consumer (Story 3.4, AC2): Timing consumes driver.pr_updated off
 		// driver.events to refresh its local PR copy. The Go consumer runtime is

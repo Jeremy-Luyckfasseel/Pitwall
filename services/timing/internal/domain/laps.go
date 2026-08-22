@@ -68,6 +68,17 @@ type LapTracker struct {
 	lapCount int
 }
 
+// Reset clears the previous-valid-crossing baseline so the NEXT crossing is treated as a
+// fresh out-lap (StartMarker) again — used after a start-finish scanner outage (Story 3.5):
+// crossings physically missed during the outage are never recorded, and the first crossing
+// on recovery re-establishes the timing baseline rather than producing one counted lap whose
+// time spans (and so fakes) the whole gap (C1). The recorded-lap count is preserved so lap
+// numbering continues across the gap; only the timing baseline is dropped.
+func (l *LapTracker) Reset() {
+	l.hasPrev = false
+	l.prev = time.Time{}
+}
+
 // Cross records a crossing at time t and reports what it produced:
 //   - StartMarker for the driver's first crossing (out-lap; no lap);
 //   - Rejected for a bounce/duplicate (delta < MinLapTimeMs; no lap, baseline

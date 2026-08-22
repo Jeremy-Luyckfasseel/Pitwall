@@ -180,6 +180,32 @@ func TestPersonalRecordBrokenData_MatchesGeneratedDTO(t *testing.T) {
 	}
 }
 
+func TestScannerOfflineData_MatchesGeneratedDTO(t *testing.T) {
+	handWritten := ScannerOfflineData{
+		ScannerID: "start-finish",
+		Since:     "2026-06-05T14:12:07.250Z",
+		GapFrom:   "2026-06-05T14:11:52.900Z",
+	}
+	generated := timingcodegen.ScannerOfflineV1SchemaJson{
+		ScannerID: handWritten.ScannerID,
+		Since:     handWritten.Since,
+		GapFrom:   handWritten.GapFrom,
+	}
+	got, want := marshalToMap(t, handWritten), marshalToMap(t, generated)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ScannerOfflineData diverges from the generated DTO:\n  hand-written: %#v\n  generated:    %#v", got, want)
+	}
+}
+
+func TestScannerOnlineData_MatchesGeneratedDTO(t *testing.T) {
+	handWritten := ScannerOnlineData{ScannerID: "start-finish", At: "2026-06-05T14:12:41.600Z"}
+	generated := timingcodegen.ScannerOnlineV1SchemaJson{ScannerID: handWritten.ScannerID, At: handWritten.At}
+	got, want := marshalToMap(t, handWritten), marshalToMap(t, generated)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ScannerOnlineData diverges from the generated DTO:\n  hand-written: %#v\n  generated:    %#v", got, want)
+	}
+}
+
 func TestCheckedInData_MatchesGeneratedDTO(t *testing.T) {
 	tp := "TP-00421"
 	handWritten := CheckedInData{

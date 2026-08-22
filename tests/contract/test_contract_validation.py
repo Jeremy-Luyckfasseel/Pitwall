@@ -44,6 +44,8 @@ EVENT_SCHEMA = {
     "session.started": os.path.join(SCHEMAS, "timing", "session.started.v1.schema.json"),
     "session.ended": os.path.join(SCHEMAS, "timing", "session.ended.v1.schema.json"),
     "personal_record.broken": os.path.join(SCHEMAS, "timing", "personal_record.broken.v1.schema.json"),
+    "scanner.offline": os.path.join(SCHEMAS, "timing", "scanner.offline.v1.schema.json"),
+    "scanner.online": os.path.join(SCHEMAS, "timing", "scanner.online.v1.schema.json"),
 }
 DATA_VALIDATOR = {t: Draft202012Validator(load(p)) for t, p in EVENT_SCHEMA.items()}
 
@@ -90,12 +92,20 @@ PRB_DATA = {
     "lapTimeMs": 41980,
     "previousMs": 42318,
 }
+SOFF_DATA = {
+    "scannerId": "start-finish",
+    "since": "2026-06-01T14:12:07.250Z",
+    "gapFrom": "2026-06-01T14:11:52.900Z",
+}
+SON_DATA = {"scannerId": "start-finish", "at": "2026-06-01T14:12:41.600Z"}
 
 VALID = {
     "lap.recorded": lambda: envelope("lap.recorded", copy.deepcopy(LAP_DATA)),
     "session.started": lambda: envelope("session.started", copy.deepcopy(SS_DATA)),
     "session.ended": lambda: envelope("session.ended", copy.deepcopy(SE_DATA)),
     "personal_record.broken": lambda: envelope("personal_record.broken", copy.deepcopy(PRB_DATA)),
+    "scanner.offline": lambda: envelope("scanner.offline", copy.deepcopy(SOFF_DATA)),
+    "scanner.online": lambda: envelope("scanner.online", copy.deepcopy(SON_DATA)),
 }
 
 
@@ -172,6 +182,13 @@ def test_personal_record_broken_previousMs_optional_first_pr():
     # subsequent break carries it. Both must validate — previousMs is optional.
     assert errors_for(with_data("personal_record.broken", previousMs=_DELETE)) == []
     assert errors_for(VALID["personal_record.broken"]()) == []
+
+
+def test_scanner_offline_gapfrom_may_equal_since():
+    # Story 3.5 / Q38.3: when no crossing has happened yet this session, gapFrom == since.
+    assert errors_for(with_data("scanner.offline", gapFrom=SOFF_DATA["since"])) == []
+    assert errors_for(VALID["scanner.offline"]()) == []
+    assert errors_for(VALID["scanner.online"]()) == []
 
 
 def test_tolerant_reader_allows_unknown_additive_field():
@@ -318,6 +335,28 @@ DATA_BAD_CASES = {
     "prb-previousMs-string": ("personal_record.broken", {"previousMs": "42318"}),
     "prb-snake-lapTimeMs": ("personal_record.broken", {"lapTimeMs": _DELETE, "lap_time_ms": 41980}),
     "prb-snake-masterId": ("personal_record.broken", {"masterId": _DELETE, "master_id": PRB_DATA["masterId"]}),
+    # ---- scanner.offline (Story 3.5 / Q38.3) ----
+    "soff-missing-scannerId": ("scanner.offline", {"scannerId": _DELETE}),
+    "soff-missing-since": ("scanner.offline", {"since": _DELETE}),
+    "soff-missing-gapFrom": ("scanner.offline", {"gapFrom": _DELETE}),
+    "soff-scannerId-wrong-type": ("scanner.offline", {"scannerId": 123}),
+    "soff-since-no-millis": ("scanner.offline", {"since": BAD_TS_NO_MILLIS}),
+    "soff-since-offset": ("scanner.offline", {"since": BAD_TS_OFFSET}),
+    "soff-since-dateonly": ("scanner.offline", {"since": BAD_TS_DATEONLY}),
+    "soff-since-wrong-type": ("scanner.offline", {"since": 123}),
+    "soff-gapFrom-no-millis": ("scanner.offline", {"gapFrom": BAD_TS_NO_MILLIS}),
+    "soff-gapFrom-offset": ("scanner.offline", {"gapFrom": BAD_TS_OFFSET}),
+    "soff-gapFrom-wrong-type": ("scanner.offline", {"gapFrom": 123}),
+    "soff-snake-scannerId": ("scanner.offline", {"scannerId": _DELETE, "scanner_id": "start-finish"}),
+    "soff-snake-gapFrom": ("scanner.offline", {"gapFrom": _DELETE, "gap_from": SOFF_DATA["gapFrom"]}),
+    # ---- scanner.online (Story 3.5 / Q38.3) ----
+    "son-missing-scannerId": ("scanner.online", {"scannerId": _DELETE}),
+    "son-missing-at": ("scanner.online", {"at": _DELETE}),
+    "son-scannerId-wrong-type": ("scanner.online", {"scannerId": 123}),
+    "son-at-no-millis": ("scanner.online", {"at": BAD_TS_NO_MILLIS}),
+    "son-at-offset": ("scanner.online", {"at": BAD_TS_OFFSET}),
+    "son-at-dateonly": ("scanner.online", {"at": BAD_TS_DATEONLY}),
+    "son-at-wrong-type": ("scanner.online", {"at": 123}),
 }
 
 
@@ -360,7 +399,7 @@ def test_committed_invalid_fixture_is_rejected(path):
     assert errs != [], f"{_rel(path, EXAMPLES)} is a known-bad fixture but VALIDATED"
 
 
-@pytest.mark.parametrize("event", ["lap.recorded", "session.started", "session.ended", "personal_record.broken"])
+@pytest.mark.parametrize("event", ["lap.recorded", "session.started", "session.ended", "personal_record.broken", "scanner.offline", "scanner.online"])
 def test_timing_event_has_paired_example_and_invalid(event):
     base = os.path.join(EXAMPLES, "timing", f"{event}.v1")
     assert os.path.exists(base + ".example.json"), f"{event} missing example"

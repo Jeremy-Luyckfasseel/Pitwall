@@ -44,6 +44,53 @@ func TestLoad_SimulatorOnFailsFastOnMissingKnobs(t *testing.T) {
 	}
 }
 
+// Story 3.5: SIM_SCANNER_OUTAGE_LAPS is optional, defaults to 0 (no outage — no behavior
+// change), and must be within [0, SIM_SESSION_LAPS) when set (a window >= the session's laps
+// would swallow the whole session — a silent misconfiguration, fail fast naming both knobs).
+func TestLoad_SimulatorScannerOutageLapsDefaultsOff(t *testing.T) {
+	cfg, err := Load(envFrom(simEnv()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SimScannerOutageLaps != 0 {
+		t.Errorf("SimScannerOutageLaps default = %d, want 0", cfg.SimScannerOutageLaps)
+	}
+}
+
+func TestLoad_SimulatorScannerOutageLapsParsed(t *testing.T) {
+	env := simEnv()
+	env["SIM_SCANNER_OUTAGE_LAPS"] = "3" // SIM_SESSION_LAPS is 10
+	cfg, err := Load(envFrom(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.SimScannerOutageLaps != 3 {
+		t.Errorf("SimScannerOutageLaps = %d, want 3", cfg.SimScannerOutageLaps)
+	}
+}
+
+func TestLoad_SimulatorRejectsNegativeScannerOutageLaps(t *testing.T) {
+	env := simEnv()
+	env["SIM_SCANNER_OUTAGE_LAPS"] = "-1"
+	if _, err := Load(envFrom(env)); err == nil {
+		t.Fatal("expected an error for negative SIM_SCANNER_OUTAGE_LAPS")
+	}
+}
+
+func TestLoad_SimulatorRejectsScannerOutageLapsAtOrAboveSessionLaps(t *testing.T) {
+	env := simEnv() // SIM_SESSION_LAPS = 10
+	env["SIM_SCANNER_OUTAGE_LAPS"] = "10"
+	_, err := Load(envFrom(env))
+	if err == nil {
+		t.Fatal("expected an error when SIM_SCANNER_OUTAGE_LAPS >= SIM_SESSION_LAPS")
+	}
+	for _, want := range []string{"SIM_SCANNER_OUTAGE_LAPS", "SIM_SESSION_LAPS"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should name %q; got: %v", want, err)
+		}
+	}
+}
+
 // Simulator ON with all required knobs: parses, applies pacing defaults.
 func TestLoad_SimulatorOnParsesKnobsAndDefaults(t *testing.T) {
 	cfg, err := Load(envFrom(simEnv()))

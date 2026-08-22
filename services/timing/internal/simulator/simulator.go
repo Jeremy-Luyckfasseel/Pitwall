@@ -79,7 +79,24 @@ type Config struct {
 	// whole PR subsystem is simulator-gated). When set, an ObservePR error is FATAL to Run
 	// (same tier as an Enqueue failure) — a detected PR is never silently dropped.
 	ObservePR func(ctx context.Context, masterID, sessionID string, lapTimeMs int64, at string) (broken bool, previousMs *int64, err error)
-	Log       *slog.Logger
+	// ScannerOutageLaps injects a single start-finish scanner outage per session that drops
+	// this many consecutive crossings (Story 3.5, FR38). >= 0; 0 (default) injects none — no
+	// behavior change from pre-3.5. The dropped crossings are the physically-missed crossings:
+	// they never become a lap.recorded (the honest gap, never faked, C1), and the affected
+	// drivers' lap trackers are Reset on recovery so no counted lap spans the gap. When > 0,
+	// GenerateSession also emits scanner.offline (at the gap start) and scanner.online (on
+	// recovery) into the stream; Run persists the outage via OpenOutage/CloseOutage.
+	ScannerOutageLaps int
+	// OpenOutage durably records a newly-detected scanner outage and returns its row id (the
+	// persistence.ScannerOutageStore.OpenOutage seam). Called by Run when it emits a
+	// scanner.offline. Required only when ScannerOutageLaps > 0; an OpenOutage error is FATAL
+	// to Run (same tier as an Enqueue/RecordHeldScan failure — a flagged gap is never dropped).
+	OpenOutage func(ctx context.Context, scannerID, sessionID, gapFrom, since, recordedAt string) (int64, error)
+	// CloseOutage sets the recovery time on the outage row OpenOutage returned
+	// (persistence.ScannerOutageStore.CloseOutage seam). Called by Run when it emits a
+	// scanner.online. Required only when ScannerOutageLaps > 0; a CloseOutage error is FATAL to Run.
+	CloseOutage func(ctx context.Context, id int64, onlineAt string) error
+	Log         *slog.Logger
 }
 
 // HeldScan is a line-crossing whose token had no completed check-in this session — the
@@ -212,6 +229,8 @@ func (s *Simulator) Run(ctx context.Context) error {
 				"alert", "unknown_token_at_line", "token", h.Token, "method", h.Method,
 				"sessionId", h.SessionID, "reason", h.Reason)
 		}
+		var sessionID string
+		var openOutageID int64
 		for _, env := range session {
 			if err := s.cfg.Enqueue(ctx, env); err != nil {
 				if ctx.Err() != nil {
@@ -230,6 +249,32 @@ func (s *Simulator) Run(ctx context.Context) error {
 						return nil
 					}
 					return perr
+				}
+			}
+			// Scanner outage durable record (Story 3.5, FR38): the scanner.offline/online
+			// envelopes are already on the bus (enqueued above); here Run persists the gap
+			// (OpenOutage on offline, CloseOutage on recovery) and alerts Control Room via a
+			// structured log — the placeholder for the E12 consumer that does not exist yet.
+			switch env.Type {
+			case messaging.SessionStartedRoutingKey:
+				if d, ok := env.Data.(messaging.SessionStartedData); ok {
+					sessionID = d.SessionID
+				}
+			case messaging.ScannerOfflineRoutingKey:
+				id, oerr := s.openOutage(ctx, env, sessionID)
+				if oerr != nil {
+					if ctx.Err() != nil {
+						return nil
+					}
+					return oerr
+				}
+				openOutageID = id
+			case messaging.ScannerOnlineRoutingKey:
+				if oerr := s.closeOutage(ctx, env, openOutageID, sessionID); oerr != nil {
+					if ctx.Err() != nil {
+						return nil
+					}
+					return oerr
 				}
 			}
 			if !sleep(ctx, s.cfg.Tick) {
@@ -272,6 +317,45 @@ func (s *Simulator) observePR(ctx context.Context, lapEnv messaging.Envelope) er
 	}
 	s.logInfo("personal record broken", "masterId", d.MasterID, "sessionId", d.SessionID,
 		"lapTimeMs", d.LapTimeMs, "correlationId", lapEnv.CorrelationID)
+	return nil
+}
+
+// openOutage durably records a scanner.offline (Story 3.5, AC1) via the OpenOutage seam and
+// alerts Control Room with a structured log at alert severity — the placeholder for the E12
+// consumer (mirroring the Story 2.5 unknown-token alert). It returns the outage row id so the
+// matching closeOutage can close it. A nil seam (outage subsystem not wired) is a graceful
+// no-op; a seam error is returned to Run as fatal — a flagged gap is never silently dropped.
+func (s *Simulator) openOutage(ctx context.Context, env messaging.Envelope, sessionID string) (int64, error) {
+	if s.cfg.OpenOutage == nil {
+		return 0, nil
+	}
+	d, ok := env.Data.(messaging.ScannerOfflineData)
+	if !ok {
+		return 0, fmt.Errorf("simulator openOutage: scanner.offline envelope carried %T, want ScannerOfflineData", env.Data)
+	}
+	id, err := s.cfg.OpenOutage(ctx, d.ScannerID, sessionID, d.GapFrom, d.Since, d.Since)
+	if err != nil {
+		return 0, fmt.Errorf("simulator open outage %q/%q: %w", d.ScannerID, sessionID, err)
+	}
+	s.logAlert("scanner offline — start-finish silent, gap flagged (persist-first; missed crossings never faked)",
+		"alert", "scanner_offline", "scannerId", d.ScannerID, "sessionId", sessionID, "since", d.Since, "gapFrom", d.GapFrom)
+	return id, nil
+}
+
+// closeOutage records recovery (a scanner.online, Story 3.5 AC2) via the CloseOutage seam and
+// logs it. A nil seam is a graceful no-op; a seam error is fatal to Run.
+func (s *Simulator) closeOutage(ctx context.Context, env messaging.Envelope, id int64, sessionID string) error {
+	if s.cfg.CloseOutage == nil {
+		return nil
+	}
+	d, ok := env.Data.(messaging.ScannerOnlineData)
+	if !ok {
+		return fmt.Errorf("simulator closeOutage: scanner.online envelope carried %T, want ScannerOnlineData", env.Data)
+	}
+	if err := s.cfg.CloseOutage(ctx, id, d.At); err != nil {
+		return fmt.Errorf("simulator close outage id=%d: %w", id, err)
+	}
+	s.logInfo("scanner online — start-finish recovered", "scannerId", d.ScannerID, "sessionId", sessionID, "at", d.At)
 	return nil
 }
 
@@ -364,7 +448,52 @@ func (s *Simulator) GenerateSession(base time.Time) ([]messaging.Envelope, []Hel
 	var lastAt time.Time = base
 	var held []HeldScan
 
-	for _, c := range crossings {
+	// Scanner outage window (Story 3.5, FR38): drop a contiguous run of ScannerOutageLaps
+	// crossings from the sorted stream — the physically-missed crossings during the outage.
+	// The window is placed a third of the way in (deterministic) so real laps exist BEFORE
+	// (up to gapFrom) and AFTER (from onlineAt) the gap. scanner.offline is emitted at the
+	// first missed crossing; scanner.online at the first crossing on recovery. Affected
+	// drivers' trackers are Reset on recovery so no counted lap spans (and so fakes) the gap.
+	outageActive := s.cfg.ScannerOutageLaps > 0 && len(crossings) > 2
+	startIdx, endIdx := 0, 0
+	var gapFrom string
+	var since, onlineAt time.Time
+	if outageActive {
+		startIdx = len(crossings) / 3
+		if startIdx < 1 {
+			startIdx = 1
+		}
+		endIdx = startIdx + s.cfg.ScannerOutageLaps
+		if endIdx > len(crossings)-1 {
+			endIdx = len(crossings) - 1 // always leave at least one crossing after the gap
+		}
+		if endIdx <= startIdx {
+			outageActive = false // nothing sensible to drop (tiny stream) — no outage
+		} else {
+			gapFrom = messaging.FormatWireTime(crossings[startIdx-1].at) // last good crossing before the gap
+			since = crossings[startIdx].at                              // first missed crossing (offline detected)
+			onlineAt = crossings[endIdx].at                             // first crossing on recovery
+		}
+	}
+	resetPending := map[string]bool{}
+	emittedOffline := false
+
+	for i, c := range crossings {
+		if outageActive && i >= startIdx && i < endIdx {
+			// Physically-missed crossing during the outage: omit it entirely — no lap is
+			// ever produced for it (the honest gap, never faked, C1). Flag the affected
+			// driver so its tracker is Reset on recovery (no gap-spanning lap time).
+			if !emittedOffline {
+				out = append(out, messaging.NewScannerOfflineEnvelope(s.cfg.Source, correlationID, messaging.ScannerID, gapFrom, since))
+				emittedOffline = true
+			}
+			resetPending[c.driver] = true
+			continue
+		}
+		if outageActive && emittedOffline && i == endIdx {
+			// First crossing after the window = the scanner is back online (recovery).
+			out = append(out, messaging.NewScannerOnlineEnvelope(s.cfg.Source, correlationID, messaging.ScannerID, onlineAt))
+		}
 		if !checkedIn[c.driver] {
 			// Register-first gate (AC1/AC2): a token with no completed check-in this
 			// session never reaches a LapTracker and never produces a lap.recorded — it
@@ -374,6 +503,12 @@ func (s *Simulator) GenerateSession(base time.Time) ([]messaging.Envelope, []Hel
 				Reason: "no completed check-in this session", At: c.at,
 			})
 			continue
+		}
+		if resetPending[c.driver] {
+			// Recovery: re-establish this driver's timing baseline so the resume crossing
+			// is a fresh out-lap, not a counted lap whose time spans the outage.
+			trackers[c.driver].Reset()
+			delete(resetPending, c.driver)
 		}
 		lap, outcome := trackers[c.driver].Cross(c.at)
 		if outcome != domain.Counted {

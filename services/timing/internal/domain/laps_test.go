@@ -49,6 +49,35 @@ func TestLapTracker_SubsequentCrossingsCountAndDelta(t *testing.T) {
 	}
 }
 
+// Story 3.5: after a scanner outage, Reset makes the next crossing a fresh start marker
+// (out-lap) so no counted lap ever spans the gap with an inflated, faked lap time (C1).
+// Lap numbering continues (the driver's recorded-lap count is not lost).
+func TestLapTracker_ResetMakesNextCrossingAStartMarker(t *testing.T) {
+	var lt LapTracker
+	lt.Cross(at(0))                     // out-lap
+	if _, oc := lt.Cross(at(45)); oc != Counted {
+		t.Fatalf("second crossing should be Counted, got %v", oc)
+	}
+
+	// Scanner goes offline; on recovery Reset is called so the resume crossing is a
+	// fresh start marker (its delta from the pre-gap crossing — which would span the
+	// outage — is never emitted as a lap).
+	lt.Reset()
+	if _, oc := lt.Cross(at(600)); oc != StartMarker {
+		t.Fatalf("post-reset crossing should be a StartMarker, got %v", oc)
+	}
+
+	// The next crossing resumes counting, timed from the RESUME crossing (not across
+	// the gap), and lap numbering continues at 2 (the pre-gap lap 1 is not lost).
+	lap, oc := lt.Cross(at(645)) // +45s from the resume crossing
+	if oc != Counted {
+		t.Fatalf("crossing after reset+startmarker should be Counted, got %v", oc)
+	}
+	if lap.LapNumber != 2 || lap.LapTimeMs != 45000 {
+		t.Errorf("lap = {%d, %d}, want {2, 45000} (timed from resume, numbering continues)", lap.LapNumber, lap.LapTimeMs)
+	}
+}
+
 // AC2 boundary fixtures: relative to the previous valid crossing, MIN-1 is
 // rejected as a bounce (and does NOT advance the baseline), exactly MIN and MIN+1
 // are accepted.

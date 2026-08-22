@@ -43,6 +43,18 @@ here is **extracted** to `libs/go-pitwall` in Epic 2 (grow-don't-pre-scaffold).
   A second, sim-gated consumer binds Driver's `driver.pr_updated` and **refreshes** the
   local copy with the confirmed canonical value (latest-confirmed-wins). The whole PR
   subsystem is gated with the simulator (the only lap source today).
+- **Scanner-offline — persist-first, never a faked lap** (Story 3.5, FR38): prior laps are
+  already persisted the instant they are read (persist-first via the Story-1.4 outbox), so a
+  scanner outage never loses a recorded lap (M3). The simulator can **inject an outage window**
+  (`SIM_SCANNER_OUTAGE_LAPS`) that **drops** a contiguous run of start-finish crossings — the
+  physically-missed crossings, which **never become a `lap.recorded`** (the honest gap, never
+  faked, C1). Timing emits **`scanner.offline {scannerId, since, gapFrom}`** at the gap start
+  and **`scanner.online {scannerId, at}`** on recovery, durably records the outage in a private
+  **`scanner_outages`** table (`ScannerOutageStore` — open on offline, close on recovery), and
+  **alerts Control Room** via an alert-severity log (`"alert":"scanner_offline"`, the same
+  placeholder convention as the unknown-token exception — the E12 consumer does not exist yet).
+  On recovery each affected driver's lap tracker is **Reset** so no counted lap spans (and so
+  fakes) the gap. The migration is unconditional; injection + emission are sim-gated.
 - Maintains a **liveness touch-file** the Docker `healthcheck` reads.
 - Logs **structured JSON** (one correlationId per process lifecycle) and shuts down
   **gracefully** on SIGTERM/SIGINT, with a bounded best-effort **outbox flush**.
@@ -112,6 +124,8 @@ here is **extracted** to `libs/go-pitwall` in Epic 2 (grow-don't-pre-scaffold).
 | out | `lap.recorded` | `timing.events` / `lap.recorded` | one per counted lap; `lapTimeMs` = delta from previous valid crossing |
 | out | `session.ended` | `timing.events` / `session.ended` | carries a minimal per-driver `summary` (pinned since Story 3.3: each row `masterId` + `bestLapMs`/`lapCount`) |
 | out | `personal_record.broken` | `timing.events` / `personal_record.broken` | Story 3.4 (FR37): a counted lap beat the driver's local all-time PR (or set the first); `masterId`, `sessionId`, `lapTimeMs`, `previousMs?` (omitted on a first PR); flow-originating, enqueued right after its lap |
+| out | `scanner.offline` | `timing.events` / `scanner.offline` | Story 3.5 (FR38): start-finish scanner went silent mid-session; `scannerId` (`"start-finish"`), `since` (detected-offline), `gapFrom` (last good crossing before the gap); → Control Room (E12); missed crossings are never faked into laps |
+| out | `scanner.online` | `timing.events` / `scanner.online` | Story 3.5 (FR38): scanner recovered; `scannerId`, `at` (recovery); → Control Room (E12) |
 | out | `identity.lookup_requested` | `frontend.events` / `identity.lookup_requested` | register-first lookup (Story 2.3); simulator impersonates the Frontend producer (`source:"frontend"`) |
 | in | `identity.resolved` | `identity.events` / `identity.resolved` | Identity's reply; idempotent inbox + DLQ/retry/parking; signals the waiting register-first lookup |
 | in | `driver.pr_updated` | `driver.events` / `driver.pr_updated` | Story 3.4 (FR37): Driver's confirmed canonical PR; refreshes Timing's local `driver_prs` copy (second, sim-gated consumer + own queue/DLX) |
@@ -170,6 +184,7 @@ go test -tags=integration ./test/integration/...# real RabbitMQ via testcontaine
 | `SIM_SEED` | *(time-seeded)* | optional integer for a reproducible session |
 | `SIM_TRANSPONDERS` | `0` | how many sim drivers check in via a transponder (rest QR); `0..SIM_DRIVERS` (Story 2.3) |
 | `SIM_UNKNOWN_TOKEN_SCANS` | `0` | stray unbound-transponder crossings injected per session; held + persisted + flagged, never counted/minted (Story 2.5, FR39) |
+| `SIM_SCANNER_OUTAGE_LAPS` | `0` | consecutive start-finish crossings dropped per session to model a scanner outage; never faked into laps, gap recorded in `scanner_outages`, `scanner.offline`/`scanner.online` emitted (Story 3.5, FR38); must be `< SIM_SESSION_LAPS` |
 | `CONSUME_PREFETCH` | `16` | QoS for the `identity.resolved` consumer (> 0) |
 | `DLQ_MAX_ATTEMPTS` | `5` | consumer DLQ: processing attempts before parking (Q&A Round 27) |
 | `DLQ_RETRY_BASE_MS` | `1000` | consumer DLQ: first retry-hop backoff (ms) |

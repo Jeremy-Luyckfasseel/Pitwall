@@ -1,0 +1,16 @@
+{
+  "id": "018f9a3d-4e51-7c62-9d70-3f4a5b6c7d81",
+  "type": "scanner.offline",
+  "source": "timing",
+  "schemaVersion": 1,
+  "envelopeVersion": 1,
+  "occurredAt": "2026-06-01T14:12:07.250Z",
+  "correlationId": "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
+  "causationId": null,
+  "_invalidReason": "since drops the milliseconds (RFC3339 without the .mmm fraction) — the wire rule requires exactly 3-digit milliseconds and a literal 'Z'; the enforced pattern must reject it.",
+  "data": {
+    "scannerId": "start-finish",
+    "since": "2026-06-01T14:12:07Z",
+    "gapFrom": "2026-06-01T14:11:52.900Z"
+  }
+}
