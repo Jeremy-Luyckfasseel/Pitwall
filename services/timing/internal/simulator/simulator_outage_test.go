@@ -103,7 +103,10 @@ func TestGenerateSession_ScannerOutage_NoGapSpanningLap(t *testing.T) {
 	cfg.ScannerOutageLaps = 2
 	evs, _ := prepared(t, cfg).GenerateSession(base)
 
-	const sane = int64(100000) // well above a normal ~45s lap, well below the ~90s gap
+	// Threshold sits BETWEEN a normal lap (mean 45s, observed max ~48s here) and a
+	// gap-spanning lap (~91s for this 2-lap gap — measured with Reset disabled). It must
+	// catch a reset regression: a gap-spanning lap would land ~91000 and fail this.
+	const sane = int64(70000)
 	for _, e := range evs {
 		if e.Type != messaging.LapRecordedRoutingKey {
 			continue
