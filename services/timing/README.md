@@ -55,6 +55,18 @@ here is **extracted** to `libs/go-pitwall` in Epic 2 (grow-don't-pre-scaffold).
   placeholder convention as the unknown-token exception — the E12 consumer does not exist yet).
   On recovery each affected driver's lap tracker is **Reset** so no counted lap spans (and so
   fakes) the gap. The migration is unconditional; injection + emission are sim-gated.
+- **Out-of-session lap reconciliation — physical reality wins** (Story 3.6, FR83/NFR24): a
+  start-finish crossing from a **known** driver can arrive while Timing thinks **no session is
+  active**. Timing keeps an in-memory **session-active flag** (set on `session.started`, cleared
+  on `session.ended`); when a crossing arrives with the flag clear, physical reality wins —
+  Timing **accepts** it and **reconciles by auto-starting a session**: it emits a fresh
+  `session.started` (a distinct `sim-oos-…` sessionId), the accepted `lap.recorded`(s), and
+  `session.ended` through the existing outbox, plus a structured **WARN** log
+  (`"reconcile":"out_of_session_lap"` — *not* an alert, per FR83's "log a warning"). The lap is
+  **never dropped**. The simulator can inject this via `SIM_OUT_OF_SESSION_LAPS` (known-driver
+  crossings during the inter-session gap). **No** new contract event and **no** durable table —
+  the `lap.recorded` + `session.started` are the durable record (the consumer-side out-of-order
+  tolerance already lives in Leaderboard, Story 1.8).
 - Maintains a **liveness touch-file** the Docker `healthcheck` reads.
 - Logs **structured JSON** (one correlationId per process lifecycle) and shuts down
   **gracefully** on SIGTERM/SIGINT, with a bounded best-effort **outbox flush**.
@@ -185,6 +197,7 @@ go test -tags=integration ./test/integration/...# real RabbitMQ via testcontaine
 | `SIM_TRANSPONDERS` | `0` | how many sim drivers check in via a transponder (rest QR); `0..SIM_DRIVERS` (Story 2.3) |
 | `SIM_UNKNOWN_TOKEN_SCANS` | `0` | stray unbound-transponder crossings injected per session; held + persisted + flagged, never counted/minted (Story 2.5, FR39) |
 | `SIM_SCANNER_OUTAGE_LAPS` | `0` | consecutive start-finish crossings dropped per session to model a scanner outage; never faked into laps, gap recorded in `scanner_outages`, `scanner.offline`/`scanner.online` emitted (Story 3.5, FR38); must be `< SIM_SESSION_LAPS` |
+| `SIM_OUT_OF_SESSION_LAPS` | `0` | counted laps injected per inter-session gap as a reconciled out-of-session session (known-driver crossings while no session is active); accepted + auto-started (`sim-oos-…` session) + WARN-logged, never dropped (Story 3.6, FR83/NFR24); independent of `SIM_SESSION_LAPS` |
 | `CONSUME_PREFETCH` | `16` | QoS for the `identity.resolved` consumer (> 0) |
 | `DLQ_MAX_ATTEMPTS` | `5` | consumer DLQ: processing attempts before parking (Q&A Round 27) |
 | `DLQ_RETRY_BASE_MS` | `1000` | consumer DLQ: first retry-hop backoff (ms) |
