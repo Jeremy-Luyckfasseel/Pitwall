@@ -58,6 +58,13 @@ type Config struct {
 	// must be >= 0.
 	UnknownTokenScans int
 
+	// SimScannerOutageLaps is how many consecutive start-finish crossings the simulator
+	// drops per session to model a scanner outage — the scanner-offline/persist-first path
+	// (Story 3.5, FR38). Optional, default 0 (no outage — no behavior change); must be
+	// within [0, SimSessionLaps) (a window at/above the session's laps would swallow the
+	// whole session — a silent misconfiguration).
+	SimScannerOutageLaps int
+
 	// Consumer + DLQ knobs — Timing's FIRST inbound consumer (identity.resolved) arrives
 	// in Story 2.3. ConsumePrefetch bounds in-flight unacked deliveries (QoS, > 0). The
 	// DLQ policy (Story 1.9; values pinned Q&A Round 27) governs retry-then-park.
@@ -224,6 +231,23 @@ func loadSimulator(getenv func(string) string, cfg *Config) error {
 		return fmt.Errorf("SIM_UNKNOWN_TOKEN_SCANS must be >= 0, got %d", unknownTokenScans)
 	}
 	cfg.UnknownTokenScans = unknownTokenScans
+
+	// SIM_SCANNER_OUTAGE_LAPS (Story 3.5): optional, default 0 (no outage). Must be >= 0 and,
+	// when set, strictly below SimSessionLaps so laps remain before and after the gap — else
+	// the window would swallow the whole session (a silent misconfiguration). Fail fast
+	// naming both knobs (golden rule), mirroring the MIN_LAP_TIME_MS >= SIM_LAP_MEAN_MS guard.
+	outageLaps, err := intEnv(getenv, "SIM_SCANNER_OUTAGE_LAPS", 0)
+	if err != nil {
+		return err
+	}
+	if outageLaps < 0 {
+		return fmt.Errorf("SIM_SCANNER_OUTAGE_LAPS must be >= 0, got %d", outageLaps)
+	}
+	if outageLaps >= cfg.SimSessionLaps {
+		return fmt.Errorf("SIM_SCANNER_OUTAGE_LAPS (%d) must be below SIM_SESSION_LAPS (%d), else the outage would swallow the whole session",
+			outageLaps, cfg.SimSessionLaps)
+	}
+	cfg.SimScannerOutageLaps = outageLaps
 
 	// Optional, correctness-neutral pacing knobs (defaults allowed).
 	tick, err := intEnv(getenv, "SIM_TICK_MS", 250)
