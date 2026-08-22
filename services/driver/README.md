@@ -36,6 +36,18 @@ more with each event:
 The `session.ended.summary[]` item shape was pinned at this consume point (Q36.1):
 `masterId` required, `bestLapMs`/`lapCount` optional, item still tolerant.
 
+**Story 3.4 adds the canonical personal record.** The same consumer also handles
+`personal_record.broken` (bound on the existing `timing.events` binding). Driver is the
+**system of record** for the all-time PR (FR11): a break is a *trigger*, not a trusted
+value. In one transaction it runs the safety net, then computes the canonical PR
+**authoritatively from `driver_laps`** — `candidate = min(fastest lap in history, the
+event's claimed lapTimeMs)`, folding the claim in only as an arrival-order floor (Q&A
+Round 37 / Q37.4) — stores it in `driver_prs`, and publishes `driver.pr_updated
+{masterId, lapTimeMs, setAt}` **only when the canonical value actually changes**
+(idempotent; a redelivered or non-beating break publishes nothing). `setAt` is the
+record-setting lap's `at` (fallback: the break's `occurredAt` when that lap has not yet
+landed in history). Timing consumes `driver.pr_updated` to refresh its local PR cache.
+
 ## Stack
 
 Python 3.14.x, built on [`libs/py-pitwall`](../../libs/py-pitwall/README.md) (the
