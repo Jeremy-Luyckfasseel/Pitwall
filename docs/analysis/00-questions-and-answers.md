@@ -1596,3 +1596,85 @@ and a single bad/late claim would propagate as canonical.
 >   lap production being simulator-only today.
 > - **Timing's local PR copy is the ECST cache; Driver's `driver_prs`/history is canonical** — the
 >   local copy is refreshed by `driver.pr_updated`, never treated as SoR (timing.md).
+
+---
+
+## Round 38 — Story 3.5 Scanner-offline: outage-detection model, durable gap record, event payload semantics, and blast radius (2026-08-22)
+
+> Surfaced while drafting **Story 3.5** (Scanner-offline — persist-first, never a faked lap). The
+> high-level behavior is already fixed and must be followed exactly: **persist-first** (prior laps
+> never lost, M3), Timing **emits `scanner.offline`** and, on recovery, **`scanner.online`**, **flags
+> the gap**, **alerts Control Room**, and **acknowledges missed crossings as a gap — never faked**
+> (Q6.9, FR38, C1; `timing.md#sad-path-table`; bus catalog `scanner.offline {scannerId, since,
+> gapFrom}` / `scanner.online {scannerId, at}` → **Control Room only**). Round 37 already recorded that
+> **"even Story 3.5's scanner-offline is simulator-driven"** — the simulator is Timing's only crossing
+> source today. Four decisions are **not** answered anywhere and materially change the new contract
+> schemas and Timing's code; all asked per the golden rule (CLAUDE.md §0).
+
+**Q38.1 — How is the scanner outage detected/emitted, given it is simulator-driven?**
+A: **The simulator injects an outage window and emits `scanner.offline`/`scanner.online` at its
+boundaries.** A new optional config knob (default off — no behavior change, exactly like Story 2.5's
+`SIM_UNKNOWN_TOKEN_SCANS`) makes the simulator blank out a window of crossings per session: it enqueues
+`scanner.offline` at the window start and `scanner.online` at the window end (through the **same
+Story-1.4 outbox** as every other simulator event), and simply **omits** the crossings that fall inside
+the window — those are the physically-missed crossings, the honest gap, **never faked** into laps.
+Emission goes through a small **injected seam** (mirroring the `Enqueue`/`RecordHeldScan`/`ObservePR`
+seams) so a future **real** silence-detector can replace the simulator's boundary knowledge without
+touching the contract or the persistence. Deterministic under a seed (no wall-clock timer race).
+*Rejected:* a genuine silence-timeout detector (declare offline after no crossing for a threshold) —
+"more realistic" and reusable by real hardware, but it adds a stateful timer that races against the
+simulator's paced ticks and is premature while the simulator is the only crossing source (same
+reasoning as Q37.1's simulator-gating).
+
+**Q38.2 — Is the gap recorded durably, or are the two outbox events enough?**
+A: **Add a durable `scanner_outages` table**, mirroring Story 2.5's `held_line_scans`. A new goose
+migration (`0005_scanner_outages.sql`) + a small append-style store persist each outage
+(`scanner_id`, `session_id`, `gap_from`, `since` a.k.a. offline-detected-at, `online_at` nullable until
+recovery, `recorded_at`). This is the durable "flag the gap" record — operator-queryable by Control
+Room / a future surface (E12) beyond the transient bus events, and it keeps the reliability posture
+consistent with how the register-first held scans are recorded. The `scanner.offline`/`scanner.online`
+envelopes still flow through the outbox (they carry the signal to Control Room); the table is the
+local durable operator record. *Rejected:* outbox-events-only — lighter, and the envelopes are
+themselves durable, but it leaves no local queryable gap record and diverges from the held-scan
+precedent for the analogous "operator-surfaced operational anomaly."
+
+**Q38.3 — Exact payload field semantics for the two new events?**
+A: **`scannerId` is the fixed constant `"start-finish"`; `since`/`gapFrom`/`at` as defined below** (all
+wire timestamps, `YYYY-MM-DDTHH:MM:SS.mmmZ`, matching every other Timing timestamp):
+- **`scanner.offline { scannerId, since, gapFrom }`** — `scannerId` = `"start-finish"` (this story
+  concerns **only** the start-finish line scanner; the entry-gate scanner is out of scope and
+  `scannerId` is **not** configurable this story). `since` = the instant the scanner was detected
+  offline (the outage start / detection instant). `gapFrom` = the wire time of the **last good crossing
+  before the gap** (so a consumer knows from when crossings may be missing); when no crossing has
+  happened yet this session, `gapFrom` = `since`.
+- **`scanner.online { scannerId, at }`** — `scannerId` = `"start-finish"`; `at` = the recovery
+  timestamp (when crossings resume). *Rejected:* a configurable/derived `scannerId` or a
+  gate+line-generalized shape — premature; the start-finish scanner is the only one that produces laps
+  and the only one this story (and FR38) is about.
+
+**Q38.4 — Blast radius: does Story 3.5 modify Leaderboard or Driver?**
+A: **Timing-only.** Story 3.5 changes **only Timing + the contract** (two new schemas + Go/Python
+codegen for conformance parity + one migration/store + the simulator seam). The bus catalog routes
+`scanner.offline`/`scanner.online` to **Control Room only** — and Control Room is Epic 12, not built —
+so the "alert Control Room" obligation is satisfied today by a **structured-log placeholder at alert
+severity** (exactly like Story 2.5's `unknown_token_at_line` alert; a real bus consumer arrives in
+E12). **"Acknowledged as a gap, never faked"** is satisfied because Timing emits **no** synthetic
+`lap.recorded` for the missed window (the gap is the honest absence of laps) **plus** the two durable
+events + the durable `scanner_outages` row. AC2's "when the board/history renders" is **forward-looking
+context**, not this story's work — Leaderboard (E1) and Driver (E3) are **not** modified and do **not**
+consume these events; a visible gap indicator on the board/history is future (E5/E12). *Rejected:*
+wiring Leaderboard/Driver to consume the scanner events now — scope creep beyond the catalog, pulling
+Epic-1/Epic-3 read-models into a Timing story.
+>
+> **Derived, not separately asked (follow from the above + the committed corpus):**
+> - **`scanner.offline` / `scanner.online` are flow-originating** (`libmsg.NewDomainEnvelope`,
+>   `causationId` null, `correlationId` = the session's id) — matching every other simulator-produced
+>   Timing event (`lap.recorded`, `session.ended`, `personal_record.broken`), all built in the same
+>   simulated flow with no prior *consumed* envelope to cause them.
+> - **Both schemas codegen for Go and Python** for conformance parity (Timing (Go) publishes; there is
+>   no consumer until E12), consistent with Story 3.4 generating both languages for both events.
+> - **The whole scanner-outage subsystem is simulator-gated** (the injection knob + emission are
+>   sim-only), while the `scanner_outages` migration is unconditional (always migrated) — the same
+>   split Story 3.4 used for the `driver_prs` store vs the sim-gated PR detection.
+> - **No tombstone / erasure wiring** here — Story 3.7 owns Driver/Timing erasure + retention; the
+>   `scanner_outages` retention (operational, active + 2 y, DG-1) is a 3.7/E14 concern, not 3.5.
