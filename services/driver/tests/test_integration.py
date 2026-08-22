@@ -305,6 +305,7 @@ class _ConsumerEnv:
     queue: str
     observe_queue: str
     observe_history_queue: str = ""
+    observe_pr_queue: str = ""
 
     def deliveries(self):
         return self.consumer_bus.consume(self.queue)
@@ -335,6 +336,11 @@ class _ConsumerEnv:
             if len(out) >= count:
                 break
         return out
+
+    def observe_pr_updated(self):
+        d = next(self.observer_bus.consume(self.observe_pr_queue))
+        d.ack()
+        return json.loads(d.body)
 
     def close(self):
         self.consumer_bus.close()
@@ -368,7 +374,7 @@ def consumer_env(tmp_path, rabbitmq_params, validator: Validator) -> _ConsumerEn
     consumer_bus.declare_dlq_topology(
         ConsumerOptions(
             bindings=[
-                Binding(source_exchange=timing_exchange, routing_keys=["lap.recorded", "session.ended"]),
+                Binding(source_exchange=timing_exchange, routing_keys=["lap.recorded", "session.ended", "personal_record.broken"]),
                 Binding(source_exchange=identity_exchange, routing_keys=["identity.resolved"]),
             ],
             queue_name=queue,
@@ -387,6 +393,9 @@ def consumer_env(tmp_path, rabbitmq_params, validator: Validator) -> _ConsumerEn
     observer_bus._channel.queue_bind(observe_queue, driver_exchange, "driver.profile_updated")
     observer_bus._channel.queue_declare(observe_history_queue, durable=True)
     observer_bus._channel.queue_bind(observe_history_queue, driver_exchange, "driver.history_appended")
+    observe_pr_queue = f"test.driver.observe-pr.{suffix}"
+    observer_bus._channel.queue_declare(observe_pr_queue, durable=True)
+    observer_bus._channel.queue_bind(observe_pr_queue, driver_exchange, "driver.pr_updated")
 
     log = _RecordingLog()
     handler = Handler(
@@ -403,6 +412,7 @@ def consumer_env(tmp_path, rabbitmq_params, validator: Validator) -> _ConsumerEn
         conn=conn, consumer_bus=consumer_bus, publish_bus=publish_bus, observer_bus=observer_bus,
         handler=handler, log=log, timing_exchange=timing_exchange, identity_exchange=identity_exchange,
         queue=queue, observe_queue=observe_queue, observe_history_queue=observe_history_queue,
+        observe_pr_queue=observe_pr_queue,
     )
     yield env
     env.close()
@@ -674,3 +684,96 @@ def test_redelivered_session_ended_publishes_no_second_history(consumer_env: _Co
     assert consumer_env.conn.execute(
         "SELECT COUNT(*) FROM driver_session_summaries WHERE master_id = ?", (master_id,)
     ).fetchone()[0] == 1
+
+
+# --- Consumer (Story 3.4): canonical PR confirmation, end to end ----------------------
+
+
+def _personal_record_broken_body(envelope_id: str, master_id: str, lap_time_ms: int, session_id: str = "sess-1") -> bytes:
+    return json.dumps(
+        {
+            "id": envelope_id,
+            "type": "personal_record.broken",
+            "source": "timing",
+            "schemaVersion": 1,
+            "envelopeVersion": 1,
+            "occurredAt": "2026-08-06T12:00:00.000Z",
+            "correlationId": envelope_id,
+            "causationId": None,
+            "data": {"masterId": master_id, "sessionId": session_id, "lapTimeMs": lap_time_ms},
+        }
+    ).encode("utf-8")
+
+
+def test_personal_record_broken_confirms_pr_and_publishes_pr_updated_end_to_end(
+    consumer_env: _ConsumerEnv, validator: Validator
+):
+    """AC3: a real lap.recorded (appended to driver_laps) followed by a real
+    personal_record.broken confirms the canonical PR from history and publishes
+    driver.pr_updated (setAt = the record lap's `at`) observed on the bus."""
+    master_id = str(uuid.uuid4())
+    deliveries = consumer_env.deliveries()
+
+    # A lap lands in history first (its `at` becomes the PR's setAt).
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="lap.recorded",
+        body=_lap_recorded_body(str(uuid.uuid4()), master_id, lap_number=1),
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    consumer_env.handler.process(next(deliveries))
+    consumer_env.drain_relay_once(validator)  # drain the profile_updated
+
+    # The break for that same lap time.
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="personal_record.broken",
+        body=_personal_record_broken_body(str(uuid.uuid4()), master_id, 42000),
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    consumer_env.handler.process(next(deliveries))
+
+    pr = consumer_env.conn.execute(
+        "SELECT best_lap_ms, set_at FROM driver_prs WHERE master_id = ?", (master_id,)
+    ).fetchone()
+    assert pr[0] == 42000
+    assert pr[1] == "2026-08-06T12:00:00.000Z"  # the record lap's `at`
+
+    consumer_env.drain_relay_once(validator)
+    observed = consumer_env.observe_pr_updated()
+    assert observed["type"] == "driver.pr_updated"
+    assert observed["data"] == {"masterId": master_id, "lapTimeMs": 42000, "setAt": "2026-08-06T12:00:00.000Z"}
+
+
+def test_redelivered_personal_record_broken_publishes_no_second_pr_updated(
+    consumer_env: _ConsumerEnv, validator: Validator
+):
+    """AC3 idempotency: the SAME personal_record.broken redelivered publishes no second
+    driver.pr_updated."""
+    master_id = str(uuid.uuid4())
+    deliveries = consumer_env.deliveries()
+
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="lap.recorded",
+        body=_lap_recorded_body(str(uuid.uuid4()), master_id, lap_number=1),
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    consumer_env.handler.process(next(deliveries))
+    consumer_env.drain_relay_once(validator)
+
+    body = _personal_record_broken_body(str(uuid.uuid4()), master_id, 42000)
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="personal_record.broken", body=body,
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    consumer_env.handler.process(next(deliveries))
+    assert consumer_env.drain_relay_once(validator) == 1  # the one driver.pr_updated
+    sent_after_first = consumer_env.conn.execute("SELECT COUNT(*) FROM outbox WHERE status='sent'").fetchone()[0]
+
+    consumer_env.consumer_bus._channel.basic_publish(
+        exchange=consumer_env.timing_exchange, routing_key="personal_record.broken", body=body,
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+    consumer_env.handler.process(next(deliveries))
+
+    assert outbox_fetch_pending(consumer_env.conn, 10) == []  # nothing new enqueued
+    sent_after_redelivery = consumer_env.conn.execute("SELECT COUNT(*) FROM outbox WHERE status='sent'").fetchone()[0]
+    assert sent_after_redelivery == sent_after_first
