@@ -146,6 +146,57 @@ func TestNewPersonalRecordBrokenEnvelope_FirstPR_OmitsPreviousAndValidates(t *te
 	}
 }
 
+// Story 3.5 / AC1: scanner.offline is flow-originating and validates against /contract;
+// gapFrom is carried verbatim (the last good crossing's wire time), since is stamped.
+func TestNewScannerOfflineEnvelope_Validates(t *testing.T) {
+	v := testValidator(t)
+	since := time.Date(2026, 6, 5, 14, 12, 7, 250_000_000, time.UTC)
+	env := NewScannerOfflineEnvelope("timing", "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
+		"start-finish", "2026-06-05T14:11:52.900Z", since)
+
+	if env.Type != ScannerOfflineRoutingKey {
+		t.Errorf("Type = %q, want %q", env.Type, ScannerOfflineRoutingKey)
+	}
+	if env.OccurredAt != "2026-06-05T14:12:07.250Z" {
+		t.Errorf("OccurredAt = %q, want pinned wire format", env.OccurredAt)
+	}
+	d, ok := env.Data.(ScannerOfflineData)
+	if !ok {
+		t.Fatalf("Data is %T, want ScannerOfflineData", env.Data)
+	}
+	if d.ScannerID != "start-finish" || d.Since != "2026-06-05T14:12:07.250Z" || d.GapFrom != "2026-06-05T14:11:52.900Z" {
+		t.Errorf("data = %+v, want scannerId=start-finish since=…07.250Z gapFrom=…52.900Z", d)
+	}
+	if err := v.ValidateEnvelopeBytes(mustMarshal(t, env)); err != nil {
+		t.Fatalf("generated scanner.offline rejected by /contract: %v", err)
+	}
+}
+
+// Story 3.5 / AC2: scanner.online is flow-originating and validates against /contract.
+func TestNewScannerOnlineEnvelope_Validates(t *testing.T) {
+	v := testValidator(t)
+	at := time.Date(2026, 6, 5, 14, 12, 41, 600_000_000, time.UTC)
+	env := NewScannerOnlineEnvelope("timing", "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
+		"start-finish", at)
+
+	if env.Type != ScannerOnlineRoutingKey {
+		t.Errorf("Type = %q, want %q", env.Type, ScannerOnlineRoutingKey)
+	}
+	if env.OccurredAt != "2026-06-05T14:12:41.600Z" {
+		t.Errorf("OccurredAt = %q, want pinned wire format", env.OccurredAt)
+	}
+	d, ok := env.Data.(ScannerOnlineData)
+	if !ok {
+		t.Fatalf("Data is %T, want ScannerOnlineData", env.Data)
+	}
+	if d.ScannerID != "start-finish" || d.At != "2026-06-05T14:12:41.600Z" {
+		t.Errorf("data = %+v, want scannerId=start-finish at=…41.600Z", d)
+	}
+	if err := v.ValidateEnvelopeBytes(mustMarshal(t, env)); err != nil {
+		t.Fatalf("generated scanner.online rejected by /contract: %v", err)
+	}
+}
+
 // CausationID must serialize as JSON null (present, never omitted) for a
 // flow-originating simulator event (AR7 / wire MUST).
 func TestDomainEnvelopes_CausationIDSerializesNull(t *testing.T) {

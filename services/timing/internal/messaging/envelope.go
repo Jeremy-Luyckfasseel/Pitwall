@@ -49,7 +49,14 @@ const (
 	SessionEndedRoutingKey         = "session.ended"
 	DriverCheckedInRoutingKey      = "driver.checked_in"
 	PersonalRecordBrokenRoutingKey = "personal_record.broken"
+	ScannerOfflineRoutingKey       = "scanner.offline"
+	ScannerOnlineRoutingKey        = "scanner.online"
 )
+
+// ScannerID is the fixed identifier for the start-finish line scanner — the only scanner
+// that produces laps and the only one Story 3.5 concerns (Q38.3). Kept a plain string so a
+// future multi-scanner world can carry other ids without a schema change.
+const ScannerID = "start-finish"
 
 // Check-in methods for driver.checked_in.checkInMethod (pinned by the /contract enum).
 const (
@@ -183,6 +190,46 @@ func NewPersonalRecordBrokenEnvelope(source, correlationID, masterID, sessionID 
 		SessionID:  sessionID,
 		LapTimeMs:  lapTimeMs,
 		PreviousMs: previousMs,
+	})
+}
+
+// ScannerOfflineData is the timing/scanner.offline.v1 payload (Story 3.5, FR38 / Q38.3).
+// ScannerID is the silent scanner ("start-finish" today); Since is when it was detected
+// offline; GapFrom is the wire time of the last good crossing before the gap (= Since when
+// none yet this session). All fields required (no omitempty — meaningful wire fields, AR9).
+type ScannerOfflineData struct {
+	ScannerID string `json:"scannerId"`
+	Since     string `json:"since"`
+	GapFrom   string `json:"gapFrom"`
+}
+
+// NewScannerOfflineEnvelope builds a scanner.offline envelope. It is flow-originating (like
+// every simulator-produced event) — causationId null, correlationId = the session's id.
+// occurredAt is stamped from since (the detection instant); gapFrom is carried verbatim (the
+// last good crossing's already-formatted wire time, or since when none yet this session).
+func NewScannerOfflineEnvelope(source, correlationID, scannerID, gapFrom string, since time.Time) Envelope {
+	ts := FormatWireTime(since)
+	return libmsg.NewDomainEnvelope(ScannerOfflineRoutingKey, source, correlationID, ts, ScannerOfflineData{
+		ScannerID: scannerID,
+		Since:     ts,
+		GapFrom:   gapFrom,
+	})
+}
+
+// ScannerOnlineData is the timing/scanner.online.v1 payload (Story 3.5, FR38 / Q38.3).
+// At is the recovery time (crossings resume).
+type ScannerOnlineData struct {
+	ScannerID string `json:"scannerId"`
+	At        string `json:"at"`
+}
+
+// NewScannerOnlineEnvelope builds a scanner.online envelope. Flow-originating (causationId
+// null, correlationId = the session's id); occurredAt == data.at == the recovery time.
+func NewScannerOnlineEnvelope(source, correlationID, scannerID string, at time.Time) Envelope {
+	ts := FormatWireTime(at)
+	return libmsg.NewDomainEnvelope(ScannerOnlineRoutingKey, source, correlationID, ts, ScannerOnlineData{
+		ScannerID: scannerID,
+		At:        ts,
 	})
 }
 
