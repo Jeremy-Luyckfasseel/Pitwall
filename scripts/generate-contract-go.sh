@@ -93,6 +93,8 @@ GOWORK=off go run $GO_JSONSCHEMA $FLAGS -p timing \
   "$SCHEMAS/timing/driver.checked_in.v1.schema.json" \
   "$SCHEMAS/timing/lap.recorded.v1.schema.json" \
   "$SCHEMAS/timing/personal_record.broken.v1.schema.json" \
+  "$SCHEMAS/timing/scanner.offline.v1.schema.json" \
+  "$SCHEMAS/timing/scanner.online.v1.schema.json" \
   "$SCHEMAS/timing/session.ended.v1.schema.json" \
   "$SCHEMAS/timing/session.started.v1.schema.json" \
   -o "$OUT/timing/types.go"

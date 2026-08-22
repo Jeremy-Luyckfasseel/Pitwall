@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitwall/contract/timing/scanner.offline.v1.schema.json",
+  "title": "timing / scanner.offline (v1) data payload",
+  "description": "Timing detected the start-finish line scanner going silent mid-session. Published to the 'timing.events' exchange with routing key 'scanner.offline'; consumed by Control Room (Epic 12). Prior laps are already persisted (persist-first) and never lost (M3); the gap is flagged and Control Room is alerted; crossings physically missed during the outage are acknowledged as a gap and NEVER faked into laps (Story 3.5, FR38, Q6.9, C1). On recovery Timing emits scanner.online.",
+  "type": "object",
+  "required": ["scannerId", "since", "gapFrom"],
+  "properties": {
+    "scannerId": {
+      "type": "string",
+      "description": "The scanner that went silent. Currently the fixed start-finish line scanner (\"start-finish\") — the only scanner that produces laps and the only one this story concerns; kept a plain string for a future multi-scanner world."
+    },
+    "since": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      "description": "When the scanner was detected offline (the outage start / detection instant). RFC3339 UTC, exactly 3-digit milliseconds, literal 'Z' (AR9). The pattern is enforced (format is annotation-only)."
+    },
+    "gapFrom": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      "description": "The wire time of the last good crossing before the gap — so a consumer knows from when crossings may be missing. Equals 'since' when no crossing has happened yet this session. Same timestamp shape as 'since'."
+    }
+  }
+}

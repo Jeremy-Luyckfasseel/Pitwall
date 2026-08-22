@@ -91,6 +91,46 @@ type PersonalRecordBrokenV1SchemaJson struct {
 	SessionID string `json:"sessionId"`
 }
 
+// Timing detected the start-finish line scanner going silent mid-session.
+// Published to the 'timing.events' exchange with routing key 'scanner.offline';
+// consumed by Control Room (Epic 12). Prior laps are already persisted
+// (persist-first) and never lost (M3); the gap is flagged and Control Room is
+// alerted; crossings physically missed during the outage are acknowledged as a gap
+// and NEVER faked into laps (Story 3.5, FR38, Q6.9, C1). On recovery Timing emits
+// scanner.online.
+type ScannerOfflineV1SchemaJson struct {
+	// The wire time of the last good crossing before the gap — so a consumer knows
+	// from when crossings may be missing. Equals 'since' when no crossing has
+	// happened yet this session. Same timestamp shape as 'since'.
+	GapFrom string `json:"gapFrom"`
+
+	// The scanner that went silent. Currently the fixed start-finish line scanner
+	// ("start-finish") — the only scanner that produces laps and the only one this
+	// story concerns; kept a plain string for a future multi-scanner world.
+	ScannerID string `json:"scannerId"`
+
+	// When the scanner was detected offline (the outage start / detection instant).
+	// RFC3339 UTC, exactly 3-digit milliseconds, literal 'Z' (AR9). The pattern is
+	// enforced (format is annotation-only).
+	Since string `json:"since"`
+}
+
+// The start-finish line scanner recovered after an outage; crossings resume.
+// Published to the 'timing.events' exchange with routing key 'scanner.online';
+// consumed by Control Room (Epic 12). Pairs with the scanner.offline that opened
+// the gap (Story 3.5, FR38).
+type ScannerOnlineV1SchemaJson struct {
+	// When the scanner recovered (crossings resume). RFC3339 UTC, exactly 3-digit
+	// milliseconds, literal 'Z' (AR9). The pattern is enforced (format is
+	// annotation-only).
+	At string `json:"at"`
+
+	// The scanner that recovered. Currently the fixed start-finish line scanner
+	// ("start-finish"); kept a plain string for a future multi-scanner world. Matches
+	// the scannerId of the scanner.offline that opened the gap.
+	ScannerID string `json:"scannerId"`
+}
+
 // The ACTUAL (physical) end of a session plus its summary, emitted by Timing.
 // Published to the 'timing.events' exchange with routing key 'session.ended'.
 // Consumers: Booking, Billing (close tab), Driver (store summary), Mailing

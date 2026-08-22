@@ -1,0 +1,14 @@
+{
+  "id": "018f9a3e-6072-7183-ae91-4a5b6c7d8e92",
+  "type": "scanner.online",
+  "source": "timing",
+  "schemaVersion": 1,
+  "envelopeVersion": 1,
+  "occurredAt": "2026-06-01T14:12:41.600Z",
+  "correlationId": "8b2e0d44-1f6a-4b9c-9e23-2c7a1f0b3d55",
+  "causationId": null,
+  "_invalidReason": "scannerId is missing — it is a required field; the schema must reject a scanner.online without it.",
+  "data": {
+    "at": "2026-06-01T14:12:41.600Z"
+  }
+}
